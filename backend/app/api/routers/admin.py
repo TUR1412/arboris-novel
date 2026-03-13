@@ -163,6 +163,18 @@ async def list_novel_projects(
     return projects
 
 
+@router.post("/novel-projects/batch-delete", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_novel_projects(
+    project_ids: List[str],
+    service: NovelService = Depends(get_novel_service),
+    _: None = Depends(get_current_admin),
+) -> None:
+    if not project_ids:
+        raise HTTPException(status_code=400, detail="未提供待删除的项目")
+    deleted = await service.delete_projects_for_admin(project_ids)
+    logger.info("管理员批量删除小说项目：请求=%s，成功=%s", len(project_ids), deleted)
+
+
 @router.get("/novel-projects/{project_id}", response_model=NovelProjectSchema)
 async def get_novel_project(
     project_id: str,

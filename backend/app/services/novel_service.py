@@ -226,6 +226,17 @@ class NovelService:
             await self.repo.delete(project)
         await self.session.commit()
 
+    async def delete_projects_for_admin(self, project_ids: List[str]) -> int:
+        deleted = 0
+        for pid in project_ids:
+            project = await self.repo.get_by_id(pid)
+            if not project:
+                continue
+            await self.repo.delete(project)
+            deleted += 1
+        await self.session.commit()
+        return deleted
+
     async def count_projects(self) -> int:
         result = await self.session.execute(select(func.count(NovelProject.id)))
         return result.scalar_one()

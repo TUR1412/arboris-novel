@@ -208,6 +208,13 @@ export class AdminAPI {
     return this.request(`/novel-projects/${projectId}/chapters/${chapterNumber}`)
   }
 
+  static deleteNovels(projectIds: string[]): Promise<void> {
+    return this.request('/novel-projects/batch-delete', {
+      method: 'POST',
+      body: JSON.stringify(projectIds)
+    })
+  }
+
   // Prompts
   static listPrompts(): Promise<PromptItem[]> {
     return this.request('/prompts')

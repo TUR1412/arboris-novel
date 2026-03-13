@@ -3,8 +3,42 @@
   <n-card class="novel-management-card" size="large" :bordered="false">
     <template #header>
       <div class="card-header">
-        <span class="card-title">小说管理</span>
-        <n-tag size="small" type="primary" round>共 {{ novels.length }} 项</n-tag>
+        <div class="header-main">
+          <span class="card-title">小说管理</span>
+          <n-tag size="small" type="primary" round>共 {{ novels.length }} 项</n-tag>
+        </div>
+        <n-space :size="12" wrap>
+          <n-input
+            v-model:value="keyword"
+            clearable
+            round
+            placeholder="搜索标题 / 创作者 / 类型"
+            @update:value="handleSearch"
+            class="search-input"
+          />
+          <n-button quaternary size="small" @click="fetchNovels" :loading="loading">
+            刷新
+          </n-button>
+          <n-popconfirm
+            :disabled="selectedRowKeys.length === 0 || deleting"
+            positive-text="删除"
+            negative-text="取消"
+            type="error"
+            @positive-click="handleBatchDelete"
+          >
+            <template #trigger>
+              <n-button
+                type="error"
+                size="small"
+                :disabled="selectedRowKeys.length === 0"
+                :loading="deleting"
+              >
+                删除选中 {{ selectedRowKeys.length ? `(${selectedRowKeys.length})` : '' }}
+              </n-button>
+            </template>
+            确认删除选中的 {{ selectedRowKeys.length }} 个项目？此操作不可撤销。
+          </n-popconfirm>
+        </n-space>
       </div>
     </template>
 
@@ -16,21 +50,26 @@
       <n-spin :show="loading">
         <template #default>
           <n-empty
-            v-if="!novels.length && !loading"
+            v-if="!filteredNovels.length && !loading"
             description="暂无小说项目"
             class="empty-state"
           />
           <div v-else>
             <n-space v-if="isMobile" vertical size="large">
               <n-card
-                v-for="novel in novels"
+                v-for="novel in filteredNovels"
                 :key="novel.id"
                 size="small"
                 embedded
                 class="novel-card"
+                :class="{ selected: selectedRowKeys.includes(novel.id) }"
               >
                 <template #header>
                   <div class="mobile-card-header">
+                    <n-checkbox
+                      :checked="selectedRowKeys.includes(novel.id)"
+                      @update:checked="toggleSelection(novel.id, $event)"
+                    />
                     <span class="mobile-card-title">{{ novel.title }}</span>
                     <n-tag size="small" type="info" round>{{ novel.genre || '未分类' }}</n-tag>
                   </div>
@@ -61,11 +100,13 @@
             <n-data-table
               v-else
               :columns="columns"
-              :data="novels"
+              :data="filteredNovels"
               :pagination="pagination"
               :bordered="false"
               size="small"
               class="novel-table"
+              :row-key="rowKey"
+              :row-selection="rowSelection"
             />
           </div>
         </template>
@@ -75,18 +116,23 @@
 </template>
 
 <script setup lang="ts">
-import { h, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, h, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NAlert,
   NButton,
   NCard,
+  NCheckbox,
   NDataTable,
   NEmpty,
+  NInput,
+  NPopconfirm,
   NSpin,
   NTag,
   NSpace,
-  type DataTableColumns
+  useMessage,
+  type DataTableColumns,
+  type DataTableRowKey
 } from 'naive-ui'
 
 import { AdminAPI } from '@/api/admin'
@@ -94,14 +140,39 @@ import type { AdminNovelSummary } from '@/api/admin'
 
 const novels = ref<AdminNovelSummary[]>([])
 const loading = ref(true)
+const deleting = ref(false)
 const error = ref<string | null>(null)
 const isMobile = ref(false)
+const keyword = ref('')
+const selectedRowKeys = ref<string[]>([])
 const router = useRouter()
+const message = useMessage()
 
 const pagination = {
   pageSize: 8,
   showSizePicker: false
 }
+
+const rowKey = (row: AdminNovelSummary) => row.id
+
+const rowSelection = computed(() => ({
+  checkedRowKeys: selectedRowKeys.value as DataTableRowKey[],
+  onUpdateCheckedRowKeys: (keys: DataTableRowKey[]) => {
+    selectedRowKeys.value = keys.map(key => String(key))
+  }
+}))
+
+const filteredNovels = computed(() => {
+  if (!keyword.value.trim()) {
+    return novels.value
+  }
+  const q = keyword.value.trim().toLowerCase()
+  return novels.value.filter((novel) => (
+    novel.title.toLowerCase().includes(q) ||
+    novel.owner_username.toLowerCase().includes(q) ||
+    (novel.genre || '').toLowerCase().includes(q)
+  ))
+})
 
 const updateLayout = () => {
   isMobile.value = window.innerWidth < 768
@@ -112,15 +183,15 @@ const formatDate = (value: string | null | undefined) => {
   try {
     const date = new Date(value)
     if (isNaN(date.getTime())) return '未记录'
-    
+
     const year = date.getFullYear()
     const month = String(date.getMonth() + 1).padStart(2, '0')
     const day = String(date.getDate()).padStart(2, '0')
     const hours = String(date.getHours()).padStart(2, '0')
     const minutes = String(date.getMinutes()).padStart(2, '0')
-    
+
     return `${year}年${month}月${day}日 ${hours}:${minutes}`
-  } catch (error) {
+  } catch {
     return '未记录'
   }
 }
@@ -133,6 +204,16 @@ const formatProgress = (novel: Pick<AdminNovelSummary, 'completed_chapters' | 't
 
 const viewDetails = (novelId: string) => {
   router.push(`/admin/novel/${novelId}`)
+}
+
+const toggleSelection = (novelId: string, checked: boolean) => {
+  if (checked) {
+    if (!selectedRowKeys.value.includes(novelId)) {
+      selectedRowKeys.value.push(novelId)
+    }
+  } else {
+    selectedRowKeys.value = selectedRowKeys.value.filter(id => id !== novelId)
+  }
 }
 
 const columns: DataTableColumns<AdminNovelSummary> = [
@@ -203,10 +284,30 @@ const fetchNovels = async () => {
   error.value = null
   try {
     novels.value = await AdminAPI.listNovels()
+    selectedRowKeys.value = selectedRowKeys.value.filter(id => novels.value.some(novel => novel.id === id))
   } catch (e) {
     error.value = e instanceof Error ? e.message : '获取小说数据失败'
   } finally {
     loading.value = false
+  }
+}
+
+const handleSearch = () => {
+  selectedRowKeys.value = selectedRowKeys.value.filter(id => filteredNovels.value.some(novel => novel.id === id))
+}
+
+const handleBatchDelete = async () => {
+  if (selectedRowKeys.value.length === 0) return
+  deleting.value = true
+  try {
+    await AdminAPI.deleteNovels(selectedRowKeys.value)
+    message.success(`已删除 ${selectedRowKeys.value.length} 个项目`)
+    selectedRowKeys.value = []
+    await fetchNovels()
+  } catch (e) {
+    message.error(e instanceof Error ? e.message : '批量删除失败')
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -232,12 +333,23 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+.header-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .card-title {
   font-size: 1.25rem;
   font-weight: 600;
   color: #1f2937;
+}
+
+.search-input {
+  width: min(240px, 60vw);
 }
 
 .novel-table {
@@ -271,6 +383,10 @@ onBeforeUnmount(() => {
   border-radius: 16px;
 }
 
+.novel-card.selected {
+  outline: 2px solid #2563eb;
+}
+
 .mobile-card-header {
   display: flex;
   align-items: center;
@@ -279,6 +395,7 @@ onBeforeUnmount(() => {
 }
 
 .mobile-card-title {
+  flex: 1;
   font-size: 1rem;
   font-weight: 600;
   color: #111827;
@@ -315,8 +432,17 @@ onBeforeUnmount(() => {
     flex-direction: column;
   }
 
+  .header-main {
+    width: 100%;
+    justify-content: space-between;
+  }
+
   .card-title {
     font-size: 1.125rem;
+  }
+
+  .search-input {
+    width: 100%;
   }
 }
 </style>
