@@ -48,11 +48,12 @@ from ...services.chapter_context_service import ChapterContextService
 from ...services.chapter_ingest_service import ChapterIngestionService
 from ...services.llm_service import LLMService
 from ...services.novel_service import NovelService
+from ...services.novel_service import _normalize_version_content
 from ...services.prompt_service import PromptService
 from ...services.vector_store_service import VectorStoreService
 from ...services.writer_context_builder import WriterContextBuilder
 from ...services.chapter_guardrails import ChapterGuardrails
-from ...services.ai_review_service import AIReviewService
+from ...services.ai_review_service import AIReviewService, ReviewResult
 from ...services.finalize_service import FinalizeService
 from ...utils.json_utils import remove_think_tags, unwrap_markdown_json
 from ...repositories.system_config_repository import SystemConfigRepository
@@ -186,6 +187,98 @@ async def _rewrite_with_guardrails(
         logger.warning("未配置 rewrite_guardrails 提示词，跳过自动修复")
         return original_text
 
+    rewrite_input = f"""
+[原文]
+{original_text}
+
+[章节导演脚本]
+{json.dumps(chapter_mission, ensure_ascii=False, indent=2) if chapter_mission else "无"}
+
+[违规列表]
+{violations_text}
+"""
+
+    try:
+        response = await llm_service.get_llm_response(
+            system_prompt=rewrite_prompt,
+            conversation_history=[{"role": "user", "content": rewrite_input}],
+            temperature=0.3,
+            user_id=user_id,
+            timeout=300.0,
+            response_format=None,
+        )
+        cleaned = remove_think_tags(response)
+        logger.info("成功修复违规内容")
+        return cleaned
+    except Exception as exc:
+        logger.warning("自动修复失败，返回原文: %s", exc)
+        return original_text
+
+
+def _resolve_chapter_text(candidate_text: str, fallback_text: str) -> str:
+    normalized_candidate = _normalize_version_content(candidate_text, None)
+    if normalized_candidate:
+        return normalized_candidate
+
+    normalized_fallback = _normalize_version_content(fallback_text, None)
+    if normalized_fallback:
+        logger.warning("护栏重写未返回有效正文，已回退到修复前文本")
+        return normalized_fallback
+
+    return ""
+
+
+def _build_ai_review_feedback(review_result: ReviewResult, version_count: int) -> str:
+    if review_result.raw_response:
+        try:
+            parsed = json.loads(unwrap_markdown_json(review_result.raw_response))
+            if isinstance(parsed, dict):
+                if "best_choice" not in parsed and "best_version_index" in parsed:
+                    parsed["best_choice"] = int(parsed["best_version_index"]) + 1
+                if "reason_for_choice" not in parsed:
+                    parsed["reason_for_choice"] = (
+                        review_result.final_recommendation or review_result.overall_evaluation
+                    )
+                if "evaluation" in parsed:
+                    return json.dumps(parsed, ensure_ascii=False)
+        except Exception:
+            logger.warning("AI 评审原始返回无法直接转换为详情 JSON，将使用兼容结构")
+
+    evaluations: Dict[str, Dict[str, object]] = {}
+    for index in range(version_count):
+        is_best = index == review_result.best_version_index
+        pros = ["AI 推荐优先采用此版本"] if is_best else ["可作为备选版本参考"]
+        cons: List[str] = []
+
+        if is_best:
+            if review_result.final_recommendation:
+                pros.append(review_result.final_recommendation)
+            if review_result.refinement_suggestions:
+                cons.append(review_result.refinement_suggestions)
+            cons.extend(review_result.critical_flaws)
+        else:
+            cons.append("综合表现不及最佳版本，建议仅作参考。")
+
+        evaluations[f"version{index + 1}"] = {
+            "overall_review": (
+                review_result.overall_evaluation
+                if is_best
+                else "AI 未将该版本评为最佳版本，可结合正文自行判断取舍。"
+            ),
+            "pros": pros,
+            "cons": cons or ["暂无明显问题"],
+        }
+
+    payload = {
+        "best_choice": review_result.best_version_index + 1,
+        "reason_for_choice": review_result.final_recommendation or review_result.overall_evaluation,
+        "evaluation": evaluations,
+        "scores": review_result.scores,
+        "refinement_suggestions": review_result.refinement_suggestions,
+        "critical_flaws": review_result.critical_flaws,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
 
 async def _refresh_edit_summary_and_ingest(
     project_id: str,
@@ -245,33 +338,6 @@ async def _refresh_edit_summary_and_ingest(
         except Exception as exc:
             logger.error("章节 %s 向量化入库失败: %s", chapter_number, exc)
 
-    rewrite_input = f"""
-[原文]
-{original_text}
-
-[章节导演脚本]
-{json.dumps(chapter_mission, ensure_ascii=False, indent=2) if chapter_mission else "无"}
-
-[违规列表]
-{violations_text}
-"""
-
-    try:
-        response = await llm_service.get_llm_response(
-            system_prompt=rewrite_prompt,
-            conversation_history=[{"role": "user", "content": rewrite_input}],
-            temperature=0.3,
-            user_id=user_id,
-            timeout=300.0,
-            response_format=None,
-        )
-        cleaned = remove_think_tags(response)
-        logger.info("成功修复违规内容")
-        return cleaned
-    except Exception as exc:
-        logger.warning("自动修复失败，返回原文: %s", exc)
-        return original_text
-
 
 async def _finalize_chapter_async(
     project_id: str,
@@ -300,12 +366,18 @@ async def _finalize_chapter_async(
             (v for v in chapter.versions if v.id == selected_version_id),
             None,
         )
-        if not selected_version or not selected_version.content:
+        selected_content = _normalize_version_content(
+            selected_version.content if selected_version else None,
+            selected_version.metadata if selected_version else None,
+        )
+        if not selected_version or not selected_content:
             return
 
+        if selected_version.content != selected_content:
+            selected_version.content = selected_content
         chapter.selected_version_id = selected_version.id
         chapter.status = ChapterGenerationStatus.SUCCESSFUL.value
-        chapter.word_count = len(selected_version.content or "")
+        chapter.word_count = len(selected_content)
         await session.commit()
 
         vector_store = None
@@ -320,7 +392,7 @@ async def _finalize_chapter_async(
         await finalize_service.finalize_chapter(
             project_id=project_id,
             chapter_number=chapter_number,
-            chapter_text=selected_version.content,
+            chapter_text=selected_content,
             user_id=user_id,
             skip_vector_update=skip_vector_update,
         )
@@ -411,12 +483,18 @@ async def finalize_chapter(
         (v for v in chapter.versions if v.id == request.selected_version_id),
         None,
     )
-    if not selected_version or not selected_version.content:
+    selected_content = _normalize_version_content(
+        selected_version.content if selected_version else None,
+        selected_version.metadata if selected_version else None,
+    )
+    if not selected_version or not selected_content:
         raise HTTPException(status_code=400, detail="选中的版本不存在或内容为空")
 
+    if selected_version.content != selected_content:
+        selected_version.content = selected_content
     chapter.selected_version_id = selected_version.id
     chapter.status = ChapterGenerationStatus.SUCCESSFUL.value
-    chapter.word_count = len(selected_version.content or "")
+    chapter.word_count = len(selected_content)
     await session.commit()
 
     vector_store = None
@@ -431,7 +509,7 @@ async def finalize_chapter(
     finalize_result = await finalize_service.finalize_chapter(
         project_id=request.project_id,
         chapter_number=chapter_number,
-        chapter_text=selected_version.content,
+        chapter_text=selected_content,
         user_id=current_user.id,
         skip_vector_update=request.skip_vector_update or False,
     )
@@ -711,8 +789,15 @@ async def generate_chapter(
             except Exception:
                 parsed_json = None
 
+            resolved_content = _resolve_chapter_text(extracted_text or final_content, normalized)
+            if not resolved_content.strip():
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"生成章节第 {idx + 1} 个版本时未得到有效正文",
+                )
+
             return {
-                "content": extracted_text or final_content,
+                "content": resolved_content,
                 "parsed_json": parsed_json,
                 "guardrail": guardrail_metadata,
                 "chapter_mission": chapter_mission,
@@ -867,13 +952,10 @@ async def evaluate_chapter(
     novel_service = NovelService(session)
     prompt_service = PromptService(session)
     llm_service = LLMService(session)
-
-    project = await novel_service.ensure_project_owner(project_id, current_user.id)
-    # 确保预加载 selected_version 关系
-    from sqlalchemy.orm import selectinload
+    await novel_service.ensure_project_owner(project_id, current_user.id)
     stmt = (
         select(Chapter)
-        .options(selectinload(Chapter.selected_version))
+        .options(selectinload(Chapter.selected_version), selectinload(Chapter.versions))
         .where(
             Chapter.project_id == project_id,
             Chapter.chapter_number == request.chapter_number,
@@ -881,70 +963,50 @@ async def evaluate_chapter(
     )
     result = await session.execute(stmt)
     chapter = result.scalars().first()
-    
+
     if not chapter:
         chapter = await novel_service.get_or_create_chapter(project_id, request.chapter_number)
 
-    # 如果没有选中版本，使用最新版本进行评审
-    version_to_evaluate = chapter.selected_version
-    if not version_to_evaluate:
-        # 获取该章节的所有版本，选择最新的一个
-        from sqlalchemy.orm import selectinload
-        stmt_versions = (
-            select(Chapter)
-            .options(selectinload(Chapter.versions))
-            .where(
-                Chapter.project_id == project_id,
-                Chapter.chapter_number == request.chapter_number,
-            )
+    sorted_versions = sorted(chapter.versions or [], key=lambda item: item.created_at)
+    if not sorted_versions:
+        raise HTTPException(status_code=400, detail="该章节还没有生成任何版本，无法进行评审")
+
+    version_texts = [
+        _normalize_version_content(version.content, version.metadata)
+        for version in sorted_versions
+    ]
+    if not all(text.strip() for text in version_texts):
+        raise HTTPException(
+            status_code=400,
+            detail="当前章节存在无效版本正文，请先重新生成后再进行 AI 评审",
         )
-        result_versions = await session.execute(stmt_versions)
-        chapter_with_versions = result_versions.scalars().first()
-        
-        if not chapter_with_versions or not chapter_with_versions.versions:
-            raise HTTPException(status_code=400, detail="该章节还没有生成任何版本，无法进行评审")
-        
-        # 使用最新的版本（列表中的最后一个）
-        version_to_evaluate = chapter_with_versions.versions[-1]
-    
-    if not version_to_evaluate or not version_to_evaluate.content:
-        raise HTTPException(status_code=400, detail="版本内容为空，无法进行评审")
+
+    chapter_mission = None
+    for version in sorted_versions:
+        if isinstance(version.metadata, dict) and version.metadata.get("chapter_mission"):
+            chapter_mission = version.metadata["chapter_mission"]
+            break
 
     chapter.status = "evaluating"
     await session.commit()
 
-    eval_prompt = await prompt_service.get_prompt("evaluation")
-    if not eval_prompt:
-        logger.warning("未配置名为 'evaluation' 的评审提示词，将跳过 AI 评审")
-        # 使用 add_chapter_evaluation 创建评审记录
-        await novel_service.add_chapter_evaluation(
-            chapter=chapter,
-            version=version_to_evaluate,
-            feedback="未配置评审提示词",
-            decision="skipped"
-        )
-        return await _load_project_schema(novel_service, project_id, current_user.id)
-
     try:
-        evaluation_raw = await llm_service.get_llm_response(
-            system_prompt=eval_prompt,
-            conversation_history=[{"role": "user", "content": version_to_evaluate.content}],
-            temperature=0.3,
+        ai_review_service = AIReviewService(llm_service, prompt_service)
+        review_result = await ai_review_service.review_versions(
+            versions=version_texts,
+            chapter_mission=chapter_mission,
             user_id=current_user.id,
         )
-        evaluation_text = remove_think_tags(evaluation_raw)
-        
-        # 校验 AI 返回的内容不为空
-        if not evaluation_text or len(evaluation_text.strip()) == 0:
-            raise ValueError("评审结果为空")
-        
-        # 使用 add_chapter_evaluation 创建评审记录
-        # 这会自动设置状态为 WAITING_FOR_CONFIRM
+        if not review_result:
+            raise ValueError("AI 评审未返回有效结果")
+
+        best_index = max(0, min(review_result.best_version_index, len(sorted_versions) - 1))
+        evaluation_text = _build_ai_review_feedback(review_result, len(sorted_versions))
         await novel_service.add_chapter_evaluation(
             chapter=chapter,
-            version=version_to_evaluate,
+            version=sorted_versions[best_index],
             feedback=evaluation_text,
-            decision="reviewed"
+            decision="reviewed",
         )
         logger.info("项目 %s 第 %s 章评审成功", project_id, request.chapter_number)
     except Exception as exc:
@@ -970,7 +1032,7 @@ async def evaluate_chapter(
             from app.models.novel import ChapterEvaluation
             evaluation_record = ChapterEvaluation(
                 chapter_id=chapter.id,
-                version_id=version_to_evaluate.id,
+                version_id=sorted_versions[-1].id if sorted_versions else None,
                 decision="failed",
                 feedback=f"评审失败: {str(exc)}",
                 score=None
@@ -1207,9 +1269,16 @@ async def edit_chapter_content_fast(
     title = outline.title if outline else f"第{request.chapter_number}章"
     summary = outline.summary if outline else ""
     real_summary = chapter.real_summary
-    content = chapter.selected_version.content if chapter.selected_version else None
+    content = (
+        _normalize_version_content(chapter.selected_version.content, chapter.selected_version.metadata)
+        if chapter.selected_version
+        else None
+    )
     versions = (
-        [v.content for v in sorted(chapter.versions, key=lambda item: item.created_at)]
+        [
+            _normalize_version_content(v.content, v.metadata)
+            for v in sorted(chapter.versions, key=lambda item: item.created_at)
+        ]
         if chapter.versions
         else None
     )

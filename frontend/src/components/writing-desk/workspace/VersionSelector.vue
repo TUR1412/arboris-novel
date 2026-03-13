@@ -125,10 +125,10 @@
             </div>
             <div class="flex-1">
               <p class="md-body-medium md-on-surface line-clamp-3">
-                {{ cleanVersionContent(version.content).substring(0, 150) }}...
+                {{ getVersionPreviewText(version.content) }}
               </p>
               <div class="mt-2 flex items-center gap-2 md-body-small md-on-surface-variant">
-                <span>约 {{ Math.round(cleanVersionContent(version.content).length / 100) * 100 }} 字</span>
+                <span>{{ getVersionLengthText(version.content) }}</span>
                 <span>•</span>
                 <span>{{ version.style || '标准' }}风格</span>
                 <span v-if="isCurrentVersion(index)" style="color: var(--md-success); font-weight: 600;">• 当前选中</span>
@@ -179,8 +179,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
 import type { Chapter, ChapterGenerationResponse, ChapterVersion } from '@/api/novel'
+import {
+  extractChapterContent,
+  getChapterPreview,
+  getRoundedChapterCharacterCount
+} from '@/utils/chapterContent'
 
 interface Props {
   selectedChapter: Chapter | null
@@ -199,48 +203,18 @@ defineEmits(['hideVersionSelector', 'update:selectedVersionIndex', 'showVersionD
 
 const isCurrentVersion = (versionIndex: number) => {
   if (!props.selectedChapter?.content || !props.availableVersions?.[versionIndex]?.content) return false
-  const cleanCurrentContent = cleanVersionContent(props.selectedChapter.content)
-  const cleanVersionContentStr = cleanVersionContent(props.availableVersions[versionIndex].content)
+  const cleanCurrentContent = extractChapterContent(props.selectedChapter.content)
+  const cleanVersionContentStr = extractChapterContent(props.availableVersions[versionIndex].content)
   return cleanCurrentContent === cleanVersionContentStr
 }
 
-const cleanVersionContent = (content: string): string => {
-  if (!content) return ''
-  try {
-    const parsed = JSON.parse(content)
-    const extractContent = (value: any): string | null => {
-      if (!value) return null
-      if (typeof value === 'string') return value
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          const nested = extractContent(item)
-          if (nested) return nested
-        }
-        return null
-      }
-      if (typeof value === 'object') {
-        for (const key of ['content', 'chapter_content', 'chapter_text', 'text', 'body', 'story']) {
-          if (value[key]) {
-            const nested = extractContent(value[key])
-            if (nested) return nested
-          }
-        }
-      }
-      return null
-    }
-    const extracted = extractContent(parsed)
-    if (extracted) {
-      content = extracted
-    }
-  } catch (error) {
-    // not a json
-  }
-  let cleaned = content.replace(/^"|"$/g, '')
-  cleaned = cleaned.replace(/\\n/g, '\n')
-  cleaned = cleaned.replace(/\\"/g, '"')
-  cleaned = cleaned.replace(/\\t/g, '\t')
-  cleaned = cleaned.replace(/\\\\/g, '\\')
-  return cleaned
+const getVersionPreviewText = (content: string): string => {
+  return getChapterPreview(content)
+}
+
+const getVersionLengthText = (content: string): string => {
+  const count = getRoundedChapterCharacterCount(content)
+  return count > 0 ? `约 ${count} 字` : '正文异常'
 }
 
 const parseMarkdown = (text: string): string => {

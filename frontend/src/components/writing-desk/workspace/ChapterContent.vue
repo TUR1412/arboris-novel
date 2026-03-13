@@ -29,7 +29,7 @@
         <h4 class="md-title-medium font-semibold">章节内容</h4>
         <div class="flex items-center gap-3">
           <div class="md-body-small md-on-surface-variant">
-            约 {{ Math.round(cleanVersionContent(selectedChapter.content || '').length / 100) * 100 }} 字
+            {{ chapterLengthText(selectedChapter.content || '') }}
           </div>
           <!-- 分层优化按钮 -->
           <button
@@ -55,7 +55,7 @@
         </div>
       </div>
       <div class="prose max-w-none">
-        <div class="whitespace-pre-wrap leading-relaxed" style="color: var(--md-on-surface);">{{ cleanVersionContent(selectedChapter.content || '') }}</div>
+        <div class="whitespace-pre-wrap leading-relaxed" style="color: var(--md-on-surface);">{{ chapterBodyText(selectedChapter.content || '') }}</div>
       </div>
     </div>
 
@@ -201,6 +201,11 @@ import { ref } from 'vue'
 import { globalAlert } from '@/composables/useAlert'
 import type { Chapter } from '@/api/novel'
 import { OptimizerAPI } from '@/api/novel'
+import {
+  extractChapterContent,
+  getChapterPreview,
+  getRoundedChapterCharacterCount
+} from '@/utils/chapterContent'
 
 interface Props {
   selectedChapter: Chapter
@@ -249,45 +254,15 @@ const optimizeDimensions = [
   }
 ]
 
-const cleanVersionContent = (content: string): string => {
-  if (!content) return ''
-  try {
-    const parsed = JSON.parse(content)
-    const extractContent = (value: any): string | null => {
-      if (!value) return null
-      if (typeof value === 'string') return value
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          const nested = extractContent(item)
-          if (nested) return nested
-        }
-        return null
-      }
-      if (typeof value === 'object') {
-        for (const key of ['content', 'chapter_content', 'chapter_text', 'text', 'body', 'story', 'parsed_json', 'result', 'data']) {
-          if (value[key]) {
-            const nested = extractContent(value[key])
-            if (nested) return nested
-          }
-        }
-      }
-      return null
-    }
-    const extracted = extractContent(parsed)
-    if (extracted) {
-      content = extracted
-    } else if (typeof parsed === 'object' && parsed && ('guardrail' in parsed || 'chapter_mission' in parsed || 'parsed_json' in parsed)) {
-      return ''
-    }
-  } catch (error) {
-    // not a json
-  }
-  let cleaned = content.replace(/^"|"$/g, '')
-  cleaned = cleaned.replace(/\\n/g, '\n')
-  cleaned = cleaned.replace(/\\"/g, '"')
-  cleaned = cleaned.replace(/\\t/g, '\t')
-  cleaned = cleaned.replace(/\\\\/g, '\\')
-  return cleaned
+const cleanVersionContent = (content: string): string => extractChapterContent(content)
+
+const chapterLengthText = (content: string): string => {
+  const count = getRoundedChapterCharacterCount(content)
+  return count > 0 ? `约 ${count} 字` : '正文异常'
+}
+
+const chapterBodyText = (content: string): string => {
+  return cleanVersionContent(content) || getChapterPreview(content, 0)
 }
 
 const sanitizeFileName = (name: string): string => {

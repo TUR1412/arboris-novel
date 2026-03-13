@@ -16,6 +16,7 @@ from ...db.session import get_session
 from ...models.novel import Chapter, ChapterOutline, ChapterVersion, NovelProject
 from ...schemas.user import UserInDB
 from ...services.llm_service import LLMService
+from ...services.novel_service import _normalize_version_content
 from ...services.prompt_service import PromptService
 
 logger = logging.getLogger(__name__)
@@ -286,7 +287,7 @@ async def get_emotion_curve(
             )
             version = version_result.scalar_one_or_none()
             if version:
-                content = version.content
+                content = _normalize_version_content(version.content, version.metadata)
         
         outline = outlines.get(chapter.chapter_number)
         title = outline.title if outline else f"第{chapter.chapter_number}章"
@@ -362,7 +363,7 @@ async def get_foreshadowing(
             )
             version = version_result.scalar_one_or_none()
             if version:
-                content = version.content
+                content = _normalize_version_content(version.content, version.metadata)
         
         outline = outlines.get(chapter.chapter_number)
         

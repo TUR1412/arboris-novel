@@ -5,6 +5,7 @@ from typing import List, Dict, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.models.novel import Chapter, ChapterVersion, ChapterOutline
+from app.services.novel_service import _normalize_version_content
 from app.utils.emotion_analyzer import analyze_emotion, detect_narrative_phase, generate_emotion_description
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,10 @@ class EmotionService:
                 select(ChapterVersion).where(ChapterVersion.id == chapter.selected_version_id)
             )
             version = version_result.scalar_one_or_none()
-            return version.content if version else ""
+            return _normalize_version_content(
+                version.content if version else None,
+                version.metadata if version else None,
+            )
         except Exception as e:
             logger.error(f"获取章节内容失败: {e}")
             return ""

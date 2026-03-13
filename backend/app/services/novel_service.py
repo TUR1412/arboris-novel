@@ -37,6 +37,10 @@ def _normalize_version_content(raw_content: Any, metadata: Any) -> str:
     return text or ""
 
 
+def _count_text_length(text: Optional[str]) -> int:
+    return len(text or "")
+
+
 def _coerce_text(value: Any) -> Optional[str]:
     if value is None:
         return None
@@ -79,6 +83,10 @@ def _clean_string(text: str, parse_json: bool = True) -> str:
             coerced = _coerce_text(parsed)
             if coerced:
                 return coerced
+            if isinstance(parsed, dict) and any(
+                key in parsed for key in ("guardrail", "parsed_json", "chapter_mission")
+            ):
+                return ""
         except json.JSONDecodeError:
             pass
     if stripped.startswith('"') and stripped.endswith('"') and len(stripped) >= 2:
@@ -492,14 +500,19 @@ class NovelService:
         if not versions or version_index < 0 or version_index >= len(versions):
             raise HTTPException(status_code=400, detail="版本索引无效")
         selected = versions[version_index]
-        
+
+        selected_content = _normalize_version_content(selected.content, selected.metadata)
+
         # 校验内容是否为空
-        if not selected.content or len(selected.content.strip()) == 0:
+        if not selected_content or len(selected_content.strip()) == 0:
             raise HTTPException(status_code=400, detail="选中的版本内容为空，无法确认为最终版")
-        
+
+        if selected.content != selected_content:
+            selected.content = selected_content
+
         chapter.selected_version_id = selected.id
         chapter.status = ChapterGenerationStatus.SUCCESSFUL.value
-        chapter.word_count = len(selected.content or "")
+        chapter.word_count = _count_text_length(selected_content)
         await self.session.commit()
         await self.session.refresh(chapter)
         await self._touch_project(chapter.project_id)
@@ -751,15 +764,20 @@ class NovelService:
             # 只有在 include_content=True 时才包含完整内容
             if include_content:
                 if chapter.selected_version:
-                    content = chapter.selected_version.content
+                    content = _normalize_version_content(
+                        chapter.selected_version.content,
+                        chapter.selected_version.metadata,
+                    )
                 if chapter.versions:
                     versions = [
-                        v.content
+                        _normalize_version_content(v.content, v.metadata)
                         for v in sorted(chapter.versions, key=lambda item: item.created_at)
                     ]
                 if chapter.evaluations:
                     latest = sorted(chapter.evaluations, key=lambda item: item.created_at)[-1]
                     evaluation_text = latest.feedback or latest.decision
+
+                word_count = _count_text_length(content)
 
         return ChapterSchema(
             chapter_number=chapter_number,

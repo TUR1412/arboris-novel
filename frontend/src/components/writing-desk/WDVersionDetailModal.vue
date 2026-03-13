@@ -11,7 +11,7 @@
             <span class="md-on-surface-variant">•</span>
             {{ version?.style || '标准' }}风格
             <span class="md-on-surface-variant">•</span>
-            约 {{ Math.round(cleanVersionContent(version?.content || '').length / 100) * 100 }} 字
+            {{ getVersionLengthText(version?.content || '') }}
           </p>
         </div>
         <button
@@ -28,7 +28,7 @@
       <div class="p-6 overflow-y-auto max-h-[60vh]">
         <div class="prose max-w-none">
           <div class="whitespace-pre-wrap leading-relaxed" style="color: var(--md-on-surface);">
-            {{ cleanVersionContent(version?.content || '') }}
+            {{ getVersionBody(version?.content || '') }}
           </div>
         </div>
       </div>
@@ -67,7 +67,11 @@
 
 <script setup lang="ts">
 import type { ChapterVersion } from '@/api/novel'
-import { computed } from 'vue'
+import {
+  extractChapterContent,
+  getChapterPreview,
+  getRoundedChapterCharacterCount
+} from '@/utils/chapterContent'
 
 interface Props {
   show: boolean
@@ -81,42 +85,16 @@ const props = defineProps<Props>()
 defineEmits(['close', 'selectVersion'])
 
 const cleanVersionContent = (content: string): string => {
-  if (!content) return ''
-  try {
-    const parsed = JSON.parse(content)
-    const extractContent = (value: any): string | null => {
-      if (!value) return null
-      if (typeof value === 'string') return value
-      if (Array.isArray(value)) {
-        for (const item of value) {
-          const nested = extractContent(item)
-          if (nested) return nested
-        }
-        return null
-      }
-      if (typeof value === 'object') {
-        for (const key of ['content', 'chapter_content', 'chapter_text', 'text', 'body', 'story']) {
-          if (value[key]) {
-            const nested = extractContent(value[key])
-            if (nested) return nested
-          }
-        }
-      }
-      return null
-    }
-    const extracted = extractContent(parsed)
-    if (extracted) {
-      content = extracted
-    }
-  } catch (error) {
-    // not a json
-  }
-  let cleaned = content.replace(/^"|"$/g, '')
-  cleaned = cleaned.replace(/\\n/g, '\n')
-  cleaned = cleaned.replace(/\\"/g, '"')
-  cleaned = cleaned.replace(/\\t/g, '\t')
-  cleaned = cleaned.replace(/\\\\/g, '\\')
-  return cleaned
+  return extractChapterContent(content)
+}
+
+const getVersionLengthText = (content: string): string => {
+  const count = getRoundedChapterCharacterCount(content)
+  return count > 0 ? `约 ${count} 字` : '正文异常'
+}
+
+const getVersionBody = (content: string): string => {
+  return cleanVersionContent(content) || getChapterPreview(content, 0)
 }
 </script>
 

@@ -24,7 +24,7 @@ from ..services.enrichment_service import EnrichmentService
 from ..services.llm_service import LLMService
 from ..services.knowledge_retrieval_service import KnowledgeRetrievalService, FilteredContext
 from ..services.memory_layer_service import MemoryLayerService
-from ..services.novel_service import NovelService
+from ..services.novel_service import NovelService, _normalize_version_content
 from ..services.preview_generation_service import PreviewGenerationService
 from ..services.prompt_service import PromptService
 from ..services.reader_simulator_service import ReaderSimulatorService, ReaderType
@@ -34,6 +34,19 @@ from ..services.writer_context_builder import WriterContextBuilder
 from ..utils.json_utils import remove_think_tags, unwrap_markdown_json
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_chapter_text(candidate_text: str, fallback_text: str) -> str:
+    normalized_candidate = _normalize_version_content(candidate_text, None)
+    if normalized_candidate:
+        return normalized_candidate
+
+    normalized_fallback = _normalize_version_content(fallback_text, None)
+    if normalized_fallback:
+        logger.warning("流水线护栏修复未返回有效正文，已回退到修复前文本")
+        return normalized_fallback
+
+    return ""
 
 
 @dataclass
@@ -787,6 +800,7 @@ class PipelineOrchestrator:
             pov=chapter_mission.get("pov") if chapter_mission else None,
         )
         guardrail_metadata = {"passed": guardrail_result.passed, "violations": []}
+        original_content = content
 
         if not guardrail_result.passed:
             guardrail_metadata["violations"] = [
@@ -809,13 +823,17 @@ class PipelineOrchestrator:
         except Exception:
             parsed_json = None
 
+        resolved_content = _resolve_chapter_text(extracted_text or content, original_content)
+        if not resolved_content.strip():
+            raise HTTPException(status_code=500, detail="生成章节版本时未得到有效正文")
+
         metadata["guardrail"] = guardrail_metadata
         if parsed_json is not None:
             metadata["parsed_json"] = parsed_json
 
         return {
             "index": index,
-            "content": extracted_text or content,
+            "content": resolved_content,
             "metadata": metadata,
         }
 

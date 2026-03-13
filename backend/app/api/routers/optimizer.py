@@ -15,7 +15,7 @@ from ...core.dependencies import get_current_user
 from ...db.session import get_session
 from ...schemas.user import UserInDB
 from ...services.llm_service import LLMService
-from ...services.novel_service import NovelService
+from ...services.novel_service import NovelService, _normalize_version_content
 from ...services.prompt_service import PromptService
 from ...utils.json_utils import remove_think_tags, unwrap_markdown_json
 
@@ -115,11 +115,13 @@ async def optimize_chapter(
     if not chapter:
         raise HTTPException(status_code=404, detail="章节不存在")
     
-    if not chapter.selected_version or not chapter.selected_version.content:
+    original_content = _normalize_version_content(
+        chapter.selected_version.content if chapter.selected_version else None,
+        chapter.selected_version.metadata if chapter.selected_version else None,
+    )
+    if not chapter.selected_version or not original_content:
         raise HTTPException(status_code=400, detail="章节尚未生成内容")
-    
-    original_content = chapter.selected_version.content
-    
+
     # 验证优化维度
     if request.dimension not in DIMENSION_PROMPT_MAP:
         raise HTTPException(

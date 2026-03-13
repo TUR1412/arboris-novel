@@ -61,11 +61,31 @@
               <h3 class="md-title-medium font-semibold">章节大纲</h3>
               <div class="flex items-center gap-2">
                 <button
+                  v-if="totalChapters > 0"
+                  @click.stop="scrollChapterList('top')"
+                  class="md-icon-btn md-ripple"
+                  title="回到顶部"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 15l7-7 7 7" />
+                  </svg>
+                </button>
+                <button
                   v-if="hasIncompleteChapters"
                   @click.stop="scrollToFirstIncompleteChapter"
                   class="md-btn md-btn-text md-ripple"
                 >
                   定位到未完成
+                </button>
+                <button
+                  v-if="totalChapters > 0"
+                  @click.stop="scrollChapterList('bottom')"
+                  class="md-icon-btn md-ripple"
+                  title="跳到底部"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
                 </button>
                 <span class="md-chip md-chip-filter selected">
                   {{ totalChapters }} 章
@@ -305,6 +325,15 @@ const hasIncompleteChapters = computed(() => {
   if (!props.project?.blueprint?.chapter_outline) return false
   return props.project.blueprint.chapter_outline.some(ch => !isChapterCompleted(ch.chapter_number))
 })
+
+const scrollChapterList = (direction: 'top' | 'bottom') => {
+  const container = listContainer.value
+  if (!container) return
+  container.scrollTo({
+    top: direction === 'top' ? 0 : container.scrollHeight,
+    behavior: 'smooth'
+  })
+}
 
 function toggleSelection(chapterNumber: number) {
   if (isChapterCompleted(chapterNumber)) return

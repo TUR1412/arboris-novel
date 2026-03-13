@@ -19,6 +19,7 @@ from ...services.emotion_analyzer_enhanced import analyze_multidimensional_emoti
 from ...services.story_trajectory_analyzer import analyze_story_trajectory
 from ...services.creative_guidance_system import generate_creative_guidance
 from ...services.cache_service import CacheService
+from ...services.novel_service import _normalize_version_content
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
@@ -189,11 +190,15 @@ async def get_enhanced_emotion_curve(
             )
             result = await session.execute(stmt)
             version = result.scalar_one_or_none()
-            
-            if version and version.content:
+
+            normalized_content = _normalize_version_content(
+                version.content if version else None,
+                version.metadata if version else None,
+            )
+            if version and normalized_content:
                 # 执行多维情感分析
                 analysis = analyze_multidimensional_emotion(
-                    content=version.content,
+                    content=normalized_content,
                     summary=chapter.real_summary or "",
                     chapter_number=chapter.chapter_number
                 )

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from ..models.project_memory import ProjectMemory
 from ..models.chapter_blueprint import ChapterBlueprint
 from .llm_service import LLMService
+from .novel_service import _normalize_version_content
 from .vector_store_service import VectorStoreService
 
 logger = logging.getLogger(__name__)
@@ -593,9 +594,9 @@ class KnowledgeRetrievalService:
         for ch in reversed(chapters):
             content = ""
             if ch.selected_version:
-                content = ch.selected_version.content
+                content = _normalize_version_content(ch.selected_version.content, ch.selected_version.metadata)
             elif ch.versions:
-                content = ch.versions[-1].content
+                content = _normalize_version_content(ch.versions[-1].content, ch.versions[-1].metadata)
             
             result.append({
                 "number": ch.chapter_number,
