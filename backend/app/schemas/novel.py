@@ -207,6 +207,8 @@ class DeleteChapterRequest(BaseModel):
 class GenerateOutlineRequest(BaseModel):
     start_chapter: int
     num_chapters: int
+    planning_notes: Optional[str] = Field(default=None, description="后续大纲扩展要求")
+    avoid_ending: bool = Field(default=True, description="是否避免过早完结并自动后移终局")
 
 
 class BlueprintPatch(BaseModel):

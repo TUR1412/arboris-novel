@@ -29,9 +29,29 @@
               <p class="md-title-small font-semibold" style="color: var(--md-on-secondary-container);">🏆 最佳选择：版本 {{ parsedEvaluation.best_choice }}</p>
               <p class="md-body-small mt-2" style="color: var(--md-on-secondary-container);">{{ parsedEvaluation.reason_for_choice }}</p>
             </div>
+            <div v-if="scoreEntries.length" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div
+                v-for="[label, score] in scoreEntries"
+                :key="label"
+                class="md-card md-card-outlined p-3"
+                style="border-radius: var(--md-radius-lg);"
+              >
+                <p class="md-body-small md-on-surface-variant">{{ label }}</p>
+                <p class="md-title-medium font-semibold">{{ score }}</p>
+              </div>
+            </div>
             <div class="space-y-4">
               <div v-for="(evalResult, versionName) in parsedEvaluation.evaluation" :key="versionName" class="md-card md-card-outlined p-4" style="border-radius: var(--md-radius-lg);">
-                <h5 class="md-title-medium font-semibold mb-2">版本 {{ String(versionName).replace('version', '') }} 评估</h5>
+                <div class="flex items-center justify-between gap-3 mb-2">
+                  <h5 class="md-title-medium font-semibold">{{ formatVersionLabel(versionName) }} 评估</h5>
+                  <span
+                    v-if="getVersionNumber(versionName) === parsedEvaluation.best_choice"
+                    class="md-chip"
+                    style="background-color: var(--md-success-container); color: var(--md-on-success-container);"
+                  >
+                    推荐版本
+                  </span>
+                </div>
                 <div class="prose prose-sm max-w-none md-on-surface space-y-3">
                   <div>
                     <p class="font-semibold">综合评价:</p>
@@ -86,21 +106,59 @@ const props = defineProps<Props>()
 
 defineEmits(['close'])
 
+const normalizeVersionNumber = (raw: string | number, fallback: number): number => {
+  const match = String(raw).match(/\d+/)
+  if (!match) return fallback
+  const parsed = Number(match[0])
+  return parsed === 0 ? 1 : parsed
+}
+
 const parsedEvaluation = computed(() => {
   if (!props.evaluation) return null
   try {
-    // First, try to parse the whole string as JSON
-    let data = JSON.parse(props.evaluation);
-    // If successful and it's a string, parse it again (for double-encoded JSON)
+    let data = JSON.parse(props.evaluation)
     if (typeof data === 'string') {
-      data = JSON.parse(data);
+      data = JSON.parse(data)
     }
-    return data;
+    if (!data || typeof data !== 'object') {
+      return null
+    }
+
+    const bestChoiceRaw = (data as any).best_choice ?? (data as any).best_version_index ?? 1
+    const bestChoice = normalizeVersionNumber(bestChoiceRaw, 1)
+    const evaluation = (data as any).evaluation && typeof (data as any).evaluation === 'object'
+      ? Object.entries((data as any).evaluation).reduce<Record<string, any>>((acc, [key, value], index) => {
+          const versionNumber = normalizeVersionNumber(key, index + 1)
+          acc[`version${versionNumber}`] = value
+          return acc
+        }, {})
+      : null
+
+    return {
+      ...data,
+      best_choice: bestChoice,
+      evaluation
+    }
   } catch (error) {
     console.error('Failed to parse evaluation JSON:', error)
     return null
   }
 })
+
+const scoreEntries = computed(() => {
+  if (!parsedEvaluation.value?.scores || typeof parsedEvaluation.value.scores !== 'object') {
+    return []
+  }
+  return Object.entries(parsedEvaluation.value.scores)
+})
+
+const getVersionNumber = (versionKey: string | number): number => {
+  return normalizeVersionNumber(versionKey, 1)
+}
+
+const formatVersionLabel = (versionKey: string | number): string => {
+  return `版本 ${getVersionNumber(versionKey)}`
+}
 
 const parseMarkdown = (text: string | null): string => {
   if (!text) return ''

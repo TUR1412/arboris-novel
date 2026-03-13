@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -228,19 +229,68 @@ def _resolve_chapter_text(candidate_text: str, fallback_text: str) -> str:
     return ""
 
 
-def _build_ai_review_feedback(review_result: ReviewResult, version_count: int) -> str:
+def _build_ai_review_feedback(
+    review_result: ReviewResult,
+    version_count: int,
+    *,
+    perspective_notes: Optional[Dict[int, str]] = None,
+    best_choice: Optional[int] = None,
+) -> str:
     if review_result.raw_response:
         try:
             parsed = json.loads(unwrap_markdown_json(review_result.raw_response))
             if isinstance(parsed, dict):
-                if "best_choice" not in parsed and "best_version_index" in parsed:
-                    parsed["best_choice"] = int(parsed["best_version_index"]) + 1
-                if "reason_for_choice" not in parsed:
-                    parsed["reason_for_choice"] = (
-                        review_result.final_recommendation or review_result.overall_evaluation
-                    )
-                if "evaluation" in parsed:
-                    return json.dumps(parsed, ensure_ascii=False)
+                candidate = parsed.get("best_choice", parsed.get("best_version_index", review_result.best_version_index))
+                if isinstance(candidate, str):
+                    match = re.search(r"(\d+)", candidate)
+                    candidate = int(match.group(1)) if match else review_result.best_version_index + 1
+                if not isinstance(candidate, int):
+                    candidate = review_result.best_version_index + 1
+                if "best_version_index" in parsed and "best_choice" not in parsed:
+                    resolved_best_choice = candidate + 1 if 0 <= candidate < version_count else max(1, min(candidate, version_count))
+                else:
+                    resolved_best_choice = candidate if 1 <= candidate <= version_count else candidate + 1
+                final_best_choice = best_choice if best_choice is not None else resolved_best_choice
+                parsed["best_choice"] = max(1, min(final_best_choice, version_count))
+                parsed["reason_for_choice"] = parsed.get("reason_for_choice") or (
+                    review_result.final_recommendation or review_result.overall_evaluation
+                )
+                if isinstance(parsed.get("evaluation"), dict):
+                    normalized_evaluation: Dict[str, Dict[str, object]] = {}
+                    for raw_key, raw_value in parsed["evaluation"].items():
+                        match = re.search(r"(\d+)", str(raw_key))
+                        if not match:
+                            continue
+                        raw_number = int(match.group(1))
+                        display_number = raw_number + 1 if raw_number == 0 else raw_number
+                        if not 1 <= display_number <= version_count:
+                            continue
+                        review_payload = raw_value if isinstance(raw_value, dict) else {}
+                        normalized_evaluation[f"version{display_number}"] = {
+                            "overall_review": review_payload.get("overall_review", "待补充"),
+                            "pros": review_payload.get("pros", []),
+                            "cons": review_payload.get("cons", []),
+                        }
+                    if normalized_evaluation:
+                        for display_number in range(1, version_count + 1):
+                            normalized_evaluation.setdefault(
+                                f"version{display_number}",
+                                {
+                                    "overall_review": "该版本暂无完整评审明细，建议结合正文人工判断。",
+                                    "pros": ["AI 未返回这一版的单独优点"],
+                                    "cons": ["AI 未返回这一版的单独缺点"],
+                                },
+                            )
+                            if perspective_notes and (display_number - 1) in perspective_notes:
+                                normalized_evaluation[f"version{display_number}"]["cons"].append(
+                                    perspective_notes[display_number - 1]
+                                )
+                                normalized_evaluation[f"version{display_number}"]["overall_review"] = (
+                                    f"{normalized_evaluation[f'version{display_number}']['overall_review']} "
+                                    f"{perspective_notes[display_number - 1]}"
+                                ).strip()
+                        parsed["evaluation"] = normalized_evaluation
+                        return json.dumps(parsed, ensure_ascii=False)
         except Exception:
             logger.warning("AI 评审原始返回无法直接转换为详情 JSON，将使用兼容结构")
 
@@ -258,6 +308,8 @@ def _build_ai_review_feedback(review_result: ReviewResult, version_count: int) -
             cons.extend(review_result.critical_flaws)
         else:
             cons.append("综合表现不及最佳版本，建议仅作参考。")
+        if perspective_notes and index in perspective_notes:
+            cons.append(perspective_notes[index])
 
         evaluations[f"version{index + 1}"] = {
             "overall_review": (
@@ -270,7 +322,7 @@ def _build_ai_review_feedback(review_result: ReviewResult, version_count: int) -
         }
 
     payload = {
-        "best_choice": review_result.best_version_index + 1,
+        "best_choice": best_choice or (review_result.best_version_index + 1),
         "reason_for_choice": review_result.final_recommendation or review_result.overall_evaluation,
         "evaluation": evaluations,
         "scores": review_result.scores,
@@ -278,6 +330,133 @@ def _build_ai_review_feedback(review_result: ReviewResult, version_count: int) -
         "critical_flaws": review_result.critical_flaws,
     }
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _outline_has_terminal_signal(title: str, summary: str) -> bool:
+    combined = f"{title} {summary}"
+    return any(keyword in combined for keyword in ("终章", "尾声", "大结局", "完结", "落幕", "终局"))
+
+
+def _outline_has_meta_language(text: str) -> bool:
+    patterns = (
+        r"距离.{0,8}完结",
+        r"还有.{0,8}章.{0,8}完结",
+        r"倒数第.{0,6}章",
+        r"后续计划",
+        r"即将完结",
+        r"本章作为",
+        r"为最终.{0,8}做铺垫",
+    )
+    return any(re.search(pattern, text) for pattern in patterns)
+
+
+def _outline_title_is_generic(title: str) -> bool:
+    return bool(re.fullmatch(r"(第\s*\d+\s*章|章节\s*\d+|\d+)", title.strip()))
+
+
+def _format_outline_context(outlines: List[ChapterOutline]) -> str:
+    if not outlines:
+        return "暂无"
+
+    if len(outlines) <= 18:
+        target_outlines = outlines
+    else:
+        target_outlines = [*outlines[:6], *outlines[-12:]]
+
+    return "\n".join(
+        f"第{o.chapter_number}章 - {o.title}: {o.summary}"
+        for o in target_outlines
+    )
+
+
+def _validate_generated_outlines(
+    chapters: List[dict],
+    expected_start: int,
+    expected_count: int,
+    *,
+    avoid_ending: bool,
+) -> List[str]:
+    issues: List[str] = []
+    if len(chapters) != expected_count:
+        issues.append(f"需要返回 {expected_count} 章，实际返回 {len(chapters)} 章。")
+
+    for index, item in enumerate(chapters):
+        expected_number = expected_start + index
+        chapter_number = item.get("chapter_number")
+        title = str(item.get("title", "")).strip()
+        summary = str(item.get("summary", "")).strip()
+
+        if chapter_number != expected_number:
+            issues.append(f"第 {index + 1} 个返回项的章节号应为 {expected_number}。")
+        if not title or len(title) < 2:
+            issues.append(f"第 {expected_number} 章标题过短或为空。")
+        elif _outline_title_is_generic(title):
+            issues.append(f"第 {expected_number} 章标题过于泛化：{title}")
+        if not summary or len(summary) < 12:
+            issues.append(f"第 {expected_number} 章摘要过短。")
+        if _outline_has_meta_language(f"{title} {summary}"):
+            issues.append(f"第 {expected_number} 章出现了“距离完结/后续计划”这类元话术。")
+        if avoid_ending and _outline_has_terminal_signal(title, summary):
+            issues.append(f"第 {expected_number} 章仍然出现了提前完结信号。")
+
+    return issues
+
+
+def _strip_dialogue_for_perspective(text: str) -> str:
+    stripped = text
+    for pattern in (r"“[^”]*”", r"\"[^\"]*\"", r"『[^』]*』", r"「[^」]*」"):
+        stripped = re.sub(pattern, "", stripped)
+    return stripped
+
+
+def _detect_narrative_perspective(text: str) -> str:
+    cleaned = _strip_dialogue_for_perspective(text)
+    first_person_score = sum(cleaned.count(token) for token in ("我", "我们", "咱", "咱们", "俺"))
+    third_person_score = sum(cleaned.count(token) for token in ("他", "她", "他们", "她们"))
+
+    if first_person_score >= max(8, int(third_person_score * 1.5)):
+        return "first_person"
+    if third_person_score >= max(8, int(first_person_score * 1.2)):
+        return "third_person"
+    return "mixed"
+
+
+def _infer_expected_narrative_perspective(project: NovelProjectSchema | object, chapter_number: int) -> Optional[str]:
+    blueprint = getattr(project, "blueprint", None)
+    context_parts = [
+        getattr(project, "initial_prompt", "") or "",
+        getattr(blueprint, "style", "") or "",
+        getattr(blueprint, "tone", "") or "",
+        getattr(blueprint, "one_sentence_summary", "") or "",
+        getattr(blueprint, "full_synopsis", "") or "",
+    ]
+    context_text = "\n".join(part for part in context_parts if part)
+
+    if any(keyword in context_text for keyword in ("第一人称", "我视角", "主角自述")):
+        return "first_person"
+    if any(keyword in context_text for keyword in ("第三人称", "全知视角", "上帝视角", "旁观视角", "他视角", "她视角")):
+        return "third_person"
+
+    chapters = sorted(getattr(project, "chapters", []) or [], key=lambda item: item.chapter_number)
+    perspective_votes: List[str] = []
+    for chapter in chapters:
+        if chapter.chapter_number >= chapter_number:
+            continue
+        if chapter.selected_version and chapter.selected_version.content:
+            normalized = _normalize_version_content(
+                chapter.selected_version.content,
+                chapter.selected_version.metadata,
+            )
+            if normalized:
+                perspective_votes.append(_detect_narrative_perspective(normalized))
+
+    first_votes = perspective_votes.count("first_person")
+    third_votes = perspective_votes.count("third_person")
+    if first_votes > third_votes and first_votes >= 2:
+        return "first_person"
+    if third_votes > first_votes and third_votes >= 2:
+        return "third_person"
+    return None
 
 
 async def _refresh_edit_summary_and_ingest(
@@ -987,21 +1166,47 @@ async def evaluate_chapter(
             chapter_mission = version.metadata["chapter_mission"]
             break
 
+    expected_perspective = _infer_expected_narrative_perspective(project, request.chapter_number)
+    review_indices = list(range(len(sorted_versions)))
+    perspective_notes: Dict[int, str] = {}
+    if expected_perspective:
+        matched_indices: List[int] = []
+        expected_label = "第一人称" if expected_perspective == "first_person" else "第三人称"
+        for index, text in enumerate(version_texts):
+            detected_perspective = _detect_narrative_perspective(text)
+            if detected_perspective in (expected_perspective, "mixed"):
+                matched_indices.append(index)
+                continue
+            detected_label = "第一人称" if detected_perspective == "first_person" else "第三人称"
+            perspective_notes[index] = (
+                f"叙述人称与全书既有设定不一致：本书应保持{expected_label}，"
+                f"该版本更接近{detected_label}，不应优先采用。"
+            )
+        if matched_indices:
+            review_indices = matched_indices
+
     chapter.status = "evaluating"
     await session.commit()
 
     try:
         ai_review_service = AIReviewService(llm_service, prompt_service)
         review_result = await ai_review_service.review_versions(
-            versions=version_texts,
+            versions=[version_texts[index] for index in review_indices],
             chapter_mission=chapter_mission,
             user_id=current_user.id,
+            expected_perspective=expected_perspective,
         )
         if not review_result:
             raise ValueError("AI 评审未返回有效结果")
 
-        best_index = max(0, min(review_result.best_version_index, len(sorted_versions) - 1))
-        evaluation_text = _build_ai_review_feedback(review_result, len(sorted_versions))
+        best_index_within_review = max(0, min(review_result.best_version_index, len(review_indices) - 1))
+        best_index = review_indices[best_index_within_review]
+        evaluation_text = _build_ai_review_feedback(
+            review_result,
+            len(sorted_versions),
+            perspective_notes=perspective_notes,
+            best_choice=best_index + 1,
+        )
         await novel_service.add_chapter_evaluation(
             chapter=chapter,
             version=sorted_versions[best_index],
@@ -1101,13 +1306,29 @@ async def generate_chapters_outline(
     # 获取蓝图信息
     project_schema = await novel_service._serialize_project(project)
     blueprint_text = json.dumps(project_schema.blueprint.model_dump(), ensure_ascii=False, indent=2)
-    
-    # 获取已有的章节大纲
-    existing_outlines = [
-        f"第{o.chapter_number}章 - {o.title}: {o.summary}"
-        for o in sorted(project.outlines, key=lambda x: x.chapter_number)
-    ]
-    existing_outlines_text = "\n".join(existing_outlines) if existing_outlines else "暂无"
+
+    sorted_outlines = sorted(project.outlines, key=lambda x: x.chapter_number)
+    avoid_ending = request.avoid_ending
+    planning_notes = request.planning_notes or "无额外扩展要求"
+    generation_start = request.start_chapter
+    generation_count = request.num_chapters
+    effective_outlines = sorted_outlines
+    replanning_reason = "保持当前主线推进，优先补足冲突、伏笔和人物推进。"
+
+    if (
+        avoid_ending
+        and sorted_outlines
+        and _outline_has_terminal_signal(sorted_outlines[-1].title or "", sorted_outlines[-1].summary or "")
+    ):
+        effective_outlines = sorted_outlines[:-1]
+        generation_start = sorted_outlines[-1].chapter_number
+        generation_count = request.num_chapters + 1
+        replanning_reason = (
+            "当前最后一章已经带有终章/完结信号。本次需要把终局后移，"
+            "从该章开始重做后续章节，让故事重新获得推进空间。"
+        )
+
+    existing_outlines_text = _format_outline_context(effective_outlines)
 
     outline_prompt = await prompt_service.get_prompt("outline_generation")
     if not outline_prompt:
@@ -1120,33 +1341,81 @@ async def generate_chapters_outline(
 [已有章节大纲]
 {existing_outlines_text}
 
+[任务性质]
+这不是机械地“往后加几章”，而是一次后续剧情规划升级。
+{replanning_reason}
+
+[硬性规则]
+1. 标题必须像正式小说章节名，禁止只写数字、`第X章`、`后续计划`、`距离完结还有几章` 之类的元话术。
+2. 摘要必须写真实剧情推进，不要对读者解释“这是过渡章”“离完结还有多远”。
+3. 除非用户明确要求完结，否则不要让新增章节直接终章、尾声或大结局。
+4. 每一章都要有可感知的戏剧动作：冲突升级、关系变化、信息揭示、伏笔推进、局势反转至少命中其一。
+5. 新增章节的质量必须与蓝图阶段产出一致，不能退化成占位标题或流水账摘要。
+
+[扩展重点]
+{planning_notes}
+
 [生成任务]
-请从第 {request.start_chapter} 章开始，续写接下来的 {request.num_chapters} 章的大纲。
+请从第 {generation_start} 章开始，重新规划接下来的 {generation_count} 章大纲。
 要求返回 JSON 格式，包含一个 chapters 数组，每个元素包含 chapter_number, title, summary。
 """
 
-    response = await llm_service.get_llm_response(
-        system_prompt=outline_prompt,
-        conversation_history=[{"role": "user", "content": prompt_input}],
-        temperature=0.7,
-        user_id=current_user.id,
-    )
-    
-    cleaned = remove_think_tags(response)
-    normalized = unwrap_markdown_json(cleaned)
+    validation_feedback = ""
+    new_outlines: List[dict] = []
+    for attempt in range(2):
+        response = await llm_service.get_llm_response(
+            system_prompt=outline_prompt,
+            conversation_history=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"{prompt_input}\n\n[上轮问题]\n{validation_feedback}"
+                        if validation_feedback
+                        else prompt_input
+                    ),
+                }
+            ],
+            temperature=0.7,
+            user_id=current_user.id,
+        )
+
+        cleaned = remove_think_tags(response)
+        normalized = unwrap_markdown_json(cleaned)
+        try:
+            data = json.loads(normalized)
+            candidate_outlines = data.get("chapters", [])
+        except Exception as exc:
+            logger.warning("后续大纲第 %s 次解析失败: %s", attempt + 1, exc)
+            validation_feedback = f"返回内容未能解析成合法 JSON：{exc}"
+            continue
+
+        issues = _validate_generated_outlines(
+            candidate_outlines,
+            generation_start,
+            generation_count,
+            avoid_ending=avoid_ending,
+        )
+        if not issues:
+            new_outlines = candidate_outlines
+            break
+
+        validation_feedback = "请严格修正以下问题后重写整个 chapters 数组：\n- " + "\n- ".join(issues)
+        logger.warning("后续大纲第 %s 次质量校验未通过: %s", attempt + 1, issues)
+
+    if not new_outlines:
+        raise HTTPException(status_code=500, detail="后续大纲生成失败：返回内容质量不达标，请重试")
+
     try:
-        data = json.loads(normalized)
-        new_outlines = data.get("chapters", [])
         for item in new_outlines:
             await novel_service.update_or_create_outline(
-                project_id, 
-                item["chapter_number"], 
-                item["title"], 
+                project_id,
+                item["chapter_number"],
+                item["title"],
                 item["summary"]
             )
         await session.commit()
     except Exception as exc:
-        logger.exception("生成大纲解析失败: %s", exc)
+        logger.exception("生成大纲落库失败: %s", exc)
         raise HTTPException(status_code=500, detail=f"大纲生成失败: {str(exc)}")
 
     return await _load_project_schema(novel_service, project_id, current_user.id)

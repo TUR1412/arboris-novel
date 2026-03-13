@@ -20,7 +20,7 @@
                   <div class="text-center sm:flex-1 sm:text-left">
                     <DialogTitle as="h3" class="md-headline-small font-semibold leading-7">生成后续大纲</DialogTitle>
                     <div class="mt-2">
-                      <p class="md-body-medium md-on-surface-variant">请输入或选择要生成的后续章节数量。</p>
+                      <p class="md-body-medium md-on-surface-variant">默认会智能延后终局，优先补足中段冲突、伏笔与角色推进，而不是草率完结。</p>
                     </div>
                   </div>
                 </div>
@@ -31,6 +31,27 @@
                     <button v-for="count in [1, 2, 5, 10]" :key="count" @click="setNumChapters(count)"
                       :class="['md-btn md-btn-outlined md-ripple', numChapters === count ? 'm3-count-selected' : '']">
                       {{ count }} 章
+                    </button>
+                  </div>
+                </div>
+                <div class="mt-6">
+                  <label for="planningNotes" class="md-text-field-label">扩展重点（可选）</label>
+                  <textarea
+                    id="planningNotes"
+                    v-model="planningNotes"
+                    rows="4"
+                    class="md-textarea w-full mt-2"
+                    placeholder="例如：加强中段冲突、不要急着完结；补足男女主关系推进；把现有终章后移并追加更完整的高潮。"
+                  ></textarea>
+                  <div class="mt-3 flex flex-wrap gap-2">
+                    <button
+                      v-for="preset in notePresets"
+                      :key="preset"
+                      type="button"
+                      class="md-chip md-chip-suggestion md-ripple"
+                      @click="planningNotes = preset"
+                    >
+                      {{ preset }}
                     </button>
                   </div>
                 </div>
@@ -59,6 +80,12 @@ const props = defineProps<Props>()
 const emit = defineEmits(['close', 'generate'])
 
 const numChapters = ref(5)
+const planningNotes = ref('')
+const notePresets = [
+  '加强中段冲突，不要急着完结',
+  '补足角色关系推进与情绪拉扯',
+  '把现有终章后移，重新拉高高潮'
+]
 
 const setNumChapters = (count: number) => {
   numChapters.value = count
@@ -66,7 +93,10 @@ const setNumChapters = (count: number) => {
 
 const handleGenerate = () => {
   if (numChapters.value > 0) {
-    emit('generate', numChapters.value)
+    emit('generate', {
+      numChapters: numChapters.value,
+      planningNotes: planningNotes.value.trim() || undefined
+    })
     emit('close')
   }
 }

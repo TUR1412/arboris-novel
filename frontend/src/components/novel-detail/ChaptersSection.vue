@@ -546,8 +546,23 @@ const evaluationData = computed(() => {
   if (!selectedChapter.value?.evaluation) return null
 
   try {
-    // 尝试解析 JSON
     const parsed = JSON.parse(selectedChapter.value.evaluation)
+    if (parsed && typeof parsed === 'object' && parsed.evaluation && typeof parsed.evaluation === 'object') {
+      const normalizedEvaluation = Object.entries(parsed.evaluation).reduce<Record<string, any>>(
+        (acc, [key, value], index) => {
+          const match = String(key).match(/\d+/)
+          const rawNumber = match ? Number(match[0]) : index + 1
+          const displayNumber = rawNumber === 0 ? 1 : rawNumber
+          acc[`version${displayNumber}`] = value
+          return acc
+        },
+        {}
+      )
+      if (parsed.best_choice === 0) {
+        parsed.best_choice = 1
+      }
+      parsed.evaluation = normalizedEvaluation
+    }
     return parsed
   } catch {
     // 如果不是 JSON，返回简单的文本格式
@@ -593,7 +608,9 @@ const getScoreBarColor = (score: number): string => {
 const getVersionNumber = (versionKey: string | number): number => {
   const normalizedKey = typeof versionKey === 'number' ? versionKey.toString() : versionKey
   const match = normalizedKey.match(/\d+/)
-  return match ? parseInt(match[0]) : 0
+  if (!match) return 1
+  const value = parseInt(match[0])
+  return value === 0 ? 1 : value
 }
 
 // 获取版本标签

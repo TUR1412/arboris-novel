@@ -525,12 +525,15 @@ const editChapterContent = async (data: {
   }
 }
 
-const handleGenerateOutline = async (numChapters: number) => {
+const handleGenerateOutline = async (payload: { numChapters: number; planningNotes?: string }) => {
   if (!project.value) return
   isGeneratingOutline.value = true
   try {
     const startChapter = (project.value.blueprint?.chapter_outline?.length || 0) + 1
-    await novelStore.generateChapterOutline(startChapter, numChapters)
+    await novelStore.generateChapterOutline(startChapter, payload.numChapters, {
+      planningNotes: payload.planningNotes,
+      avoidEnding: true
+    })
     globalAlert.showSuccess('新的章节大纲已生成', '操作成功')
   } catch (error) {
     console.error('生成大纲失败:', error)

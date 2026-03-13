@@ -138,6 +138,11 @@ export interface DeleteNovelsResponse {
   message: string
 }
 
+export interface OutlineGenerationOptions {
+  planningNotes?: string
+  avoidEnding?: boolean
+}
+
 // 内容型Section（对应后端NovelSectionType枚举）
 export type NovelSectionType = 'overview' | 'world_setting' | 'characters' | 'relationships' | 'chapter_outline' | 'chapters'
 
@@ -279,13 +284,16 @@ export class NovelAPI {
   static async generateChapterOutline(
     projectId: string,
     startChapter: number,
-    numChapters: number
+    numChapters: number,
+    options: OutlineGenerationOptions = {}
   ): Promise<NovelProject> {
     return request(`${WRITER_BASE}/${projectId}/chapters/outline`, {
       method: 'POST',
       body: JSON.stringify({
         start_chapter: startChapter,
-        num_chapters: numChapters
+        num_chapters: numChapters,
+        planning_notes: options.planningNotes,
+        avoid_ending: options.avoidEnding ?? true
       })
     })
   }

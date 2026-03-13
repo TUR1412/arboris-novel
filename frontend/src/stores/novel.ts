@@ -1,7 +1,16 @@
 // AIMETA P=小说状态_当前小说数据管理|R=currentNovel_chapters_fetch|NR=不含API调用|E=store:novel|X=internal|A=useNovelStore|D=pinia|S=none|RD=./README.ai
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { NovelProject, NovelProjectSummary, ConverseResponse, BlueprintGenerationResponse, Blueprint, DeleteNovelsResponse, ChapterOutline } from '@/api/novel'
+import type {
+  NovelProject,
+  NovelProjectSummary,
+  ConverseResponse,
+  BlueprintGenerationResponse,
+  Blueprint,
+  DeleteNovelsResponse,
+  ChapterOutline,
+  OutlineGenerationOptions
+} from '@/api/novel'
 import { NovelAPI } from '@/api/novel'
 
 export const useNovelStore = defineStore('novel', () => {
@@ -255,7 +264,11 @@ export const useNovelStore = defineStore('novel', () => {
     }
   }
 
-  async function generateChapterOutline(startChapter: number, numChapters: number) {
+  async function generateChapterOutline(
+    startChapter: number,
+    numChapters: number,
+    options: OutlineGenerationOptions = {}
+  ) {
     error.value = null
     try {
       if (!currentProject.value) {
@@ -264,7 +277,8 @@ export const useNovelStore = defineStore('novel', () => {
       const updatedProject = await NovelAPI.generateChapterOutline(
         currentProject.value.id,
         startChapter,
-        numChapters
+        numChapters,
+        options
       )
       currentProject.value = updatedProject // 更新 store
     } catch (err) {
