@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from sqlalchemy.ext.asyncio import AsyncSession
 from openai import AsyncOpenAI
 
+from ..core.config import settings
 from ..models import LLMConfig
 from ..repositories.llm_config_repository import LLMConfigRepository
 from ..repositories.system_config_repository import SystemConfigRepository
@@ -22,6 +23,18 @@ class LLMConfigService:
         self.session = session
         self.repo = LLMConfigRepository(session)
         self.system_config_repo = SystemConfigRepository(session)
+
+    def _serialize_url(self, value: Optional[object]) -> Optional[str]:
+        return str(value) if value is not None else None
+
+    def _to_read(self, instance: LLMConfig) -> LLMConfigRead:
+        return LLMConfigRead(
+            user_id=instance.user_id,
+            llm_provider_url=instance.llm_provider_url,
+            llm_provider_api_key=None,
+            llm_provider_model=instance.llm_provider_model,
+            has_api_key=bool(instance.llm_provider_api_key),
+        )
 
     def _identify_provider(self, base_url: Optional[str]) -> str:
         """根据 base_url 识别 LLM 提供商"""
@@ -75,16 +88,18 @@ class LLMConfigService:
             # HttpUrl 类型在 sqlite 中无法直接写入，需要提前转为字符串
             data["llm_provider_url"] = str(data["llm_provider_url"])
         if instance:
-            await self.repo.update_fields(instance, **data)
+            for key, value in data.items():
+                setattr(instance, key, value)
+            await self.session.flush()
         else:
             instance = LLMConfig(user_id=user_id, **data)
             await self.repo.add(instance)
         await self.session.commit()
-        return LLMConfigRead.model_validate(instance)
+        return self._to_read(instance)
 
     async def get_config(self, user_id: int) -> Optional[LLMConfigRead]:
         instance = await self.repo.get_by_user(user_id)
-        return LLMConfigRead.model_validate(instance) if instance else None
+        return self._to_read(instance) if instance else None
 
     async def delete_config(self, user_id: int) -> bool:
         instance = await self.repo.get_by_user(user_id)
@@ -94,8 +109,34 @@ class LLMConfigService:
         await self.session.commit()
         return True
 
+    async def resolve_runtime_config(
+        self,
+        *,
+        user_id: Optional[int],
+        override_api_key: Optional[str] = None,
+        override_base_url: Optional[str] = None,
+    ) -> dict[str, Optional[str]]:
+        user_config = await self.repo.get_by_user(user_id) if user_id else None
+
+        api_key = (
+            override_api_key
+            or (user_config.llm_provider_api_key if user_config and user_config.llm_provider_api_key else None)
+            or await self._get_system_value("llm.api_key")
+            or settings.openai_api_key
+        )
+        base_url = (
+            override_base_url
+            or (user_config.llm_provider_url if user_config and user_config.llm_provider_url else None)
+            or await self._get_system_value("llm.base_url")
+            or self._serialize_url(settings.openai_base_url)
+        )
+        model = (
+            user_config.llm_provider_model if user_config and user_config.llm_provider_model else None
+        ) or await self._get_system_value("llm.model") or settings.openai_model_name
+        return {"api_key": api_key, "base_url": base_url, "model": model}
+
     async def get_available_models(
-        self, api_key: str, base_url: Optional[str] = None
+        self, api_key: Optional[str], base_url: Optional[str] = None
     ) -> List[str]:
         """使用指定的凭证获取可用的模型列表"""
         if not api_key:
@@ -132,6 +173,10 @@ class LLMConfigService:
                 logger.warning("API 端点不存在，请检查 URL 是否正确")
 
             return []
+
+    async def _get_system_value(self, key: str) -> Optional[str]:
+        record = await self.system_config_repo.get_by_key(key)
+        return record.value if record else None
 
     async def _get_openai_like_models(self, api_key: str, base_url: Optional[str]) -> List[str]:
         """获取 OpenAI 或 OpenAI-like API 的模型列表"""

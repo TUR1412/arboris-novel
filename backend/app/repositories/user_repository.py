@@ -12,6 +12,15 @@ from ..models import User, UserDailyRequest
 class UserRepository(BaseRepository[User]):
     model = User
 
+    async def get_first_admin(self) -> Optional[User]:
+        stmt = (
+            select(User)
+            .where(User.is_admin.is_(True), User.is_active.is_(True))
+            .order_by(User.id.asc())
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().first()
+
     async def get_by_username(self, username: str) -> Optional[User]:
         stmt = select(User).where(User.username == username)
         result = await self.session.execute(stmt)

@@ -322,7 +322,7 @@ function handleDeleteSelected() {
   const sortedSelection = [...selectedForDeletion.value].sort((a, b) => a - b)
 
   if (!lastChapterNumber.value || !sortedSelection.includes(lastChapterNumber.value)) {
-    alert('批量删除必须包含最后一章。')
+    void globalAlert.showError('批量删除必须包含最后一章。', '无法删除章节')
     return
   }
 
@@ -330,7 +330,7 @@ function handleDeleteSelected() {
     return i === 0 || num === sortedSelection[i - 1] + 1
   })
   if (!isContinuous) {
-    alert('只能删除连续的章节块。')
+    void globalAlert.showError('只能删除连续的章节块。', '无法删除章节')
     return
   }
 
@@ -414,7 +414,7 @@ const isChapterSelecting = (chapterNumber: number) => {
 const canGenerateChapter = (chapterNumber: number) => {
   if (!props.project?.blueprint?.chapter_outline) return false
 
-  const outlines = props.project.blueprint.chapter_outline.sort((a, b) => a.chapter_number - b.chapter_number)
+  const outlines = [...props.project.blueprint.chapter_outline].sort((a, b) => a.chapter_number - b.chapter_number)
   
   for (const outline of outlines) {
     if (outline.chapter_number >= chapterNumber) break

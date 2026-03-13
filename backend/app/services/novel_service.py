@@ -18,6 +18,12 @@ _PREFERRED_CONTENT_KEYS: tuple[str, ...] = (
     "real_summary",
     "summary",
 )
+_AUXILIARY_CONTENT_KEYS: tuple[str, ...] = (
+    "parsed_json",
+    "final_content",
+    "result",
+    "data",
+)
 
 
 def _normalize_version_content(raw_content: Any, metadata: Any) -> str:
@@ -44,6 +50,13 @@ def _coerce_text(value: Any) -> Optional[str]:
                 nested = _coerce_text(value[key])
                 if nested:
                     return nested
+        for key in _AUXILIARY_CONTENT_KEYS:
+            if key in value and value[key]:
+                nested = _coerce_text(value[key])
+                if nested:
+                    return nested
+        if any(key in value for key in ("guardrail", "parsed_json", "chapter_mission")):
+            return None
         return _clean_string(json.dumps(value, ensure_ascii=False), parse_json=False)
     if isinstance(value, (list, tuple, set)):
         parts = [text for text in (_coerce_text(item) for item in value) if text]

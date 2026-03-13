@@ -15,22 +15,48 @@
         <h2 class="text-xl font-bold text-gray-800 mb-4">设置</h2>
         <nav>
           <ul>
-            <li class="px-4 py-2 bg-indigo-100 text-indigo-700 rounded-lg cursor-pointer">
-              LLM 配置
+            <li>
+              <button
+                type="button"
+                @click="activeTab = 'llm'"
+                :class="tabClass('llm')"
+              >
+                LLM 配置
+              </button>
             </li>
-            <!-- Add other settings links here in the future -->
+            <li class="mt-2">
+              <button
+                type="button"
+                @click="activeTab = 'embedding'"
+                :class="tabClass('embedding')"
+              >
+                RAG 向量配置
+              </button>
+            </li>
           </ul>
         </nav>
       </div>
 
       <!-- Main Content -->
       <div class="flex-1">
-        <LLMSettings />
+        <LLMSettings v-if="activeTab === 'llm'" />
+        <EmbeddingSettings v-else />
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue';
+import EmbeddingSettings from '@/components/EmbeddingSettings.vue';
 import LLMSettings from '@/components/LLMSettings.vue';
+
+const activeTab = ref<'llm' | 'embedding'>('llm');
+
+const tabClass = (tab: 'llm' | 'embedding') => {
+  const baseClass = 'w-full text-left px-4 py-2 rounded-lg transition-colors';
+  return activeTab.value === tab
+    ? `${baseClass} bg-indigo-100 text-indigo-700`
+    : `${baseClass} text-gray-700 hover:bg-gray-100`;
+};
 </script>

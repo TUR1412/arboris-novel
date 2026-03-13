@@ -4,9 +4,11 @@
 import logging
 from logging.config import dictConfig
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from .core.config import settings
 from .db.init_db import init_db
@@ -75,6 +77,24 @@ async def lifespan(app: FastAPI):
     yield
 
 
+def _frontend_dist_dir() -> Path:
+    """Return the built frontend directory if it exists."""
+    return (Path(__file__).resolve().parents[2] / "frontend" / "dist").resolve()
+
+
+def _resolve_frontend_asset(full_path: str) -> Path | None:
+    """Resolve a safe frontend asset path inside the dist directory."""
+    frontend_dist = _frontend_dist_dir()
+    requested = (frontend_dist / full_path.lstrip("/")).resolve()
+    try:
+        requested.relative_to(frontend_dist)
+    except ValueError:
+        return None
+    if requested.is_file():
+        return requested
+    return None
+
+
 app = FastAPI(
     title=settings.app_name,
     debug=settings.debug,
@@ -85,7 +105,8 @@ app = FastAPI(
 # CORS 配置，生产环境建议改为具体域名
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[],
+    allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -104,3 +125,29 @@ async def health_check():
         "app": settings.app_name,
         "version": "1.0.0",
     }
+
+
+frontend_dist = _frontend_dist_dir()
+frontend_index = frontend_dist / "index.html"
+
+if frontend_index.exists():
+    @app.get("/", include_in_schema=False)
+    async def serve_frontend_index():
+        """Serve the built frontend entry page."""
+        return FileResponse(frontend_index)
+
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend(full_path: str):
+        """Serve frontend assets and SPA routes from the backend."""
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+
+        asset_path = _resolve_frontend_asset(full_path)
+        if asset_path is not None:
+            return FileResponse(asset_path)
+
+        if Path(full_path).suffix:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        return FileResponse(frontend_index)

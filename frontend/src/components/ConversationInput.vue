@@ -33,6 +33,7 @@
           rows="5"
           ref="textInputRef"
           @input="handleTextareaInput"
+          @keydown="handleTextareaKeydown"
         ></textarea>
         <button
           type="submit"
@@ -68,6 +69,7 @@
         ref="textInputRef"
         rows="5"
         @input="handleTextareaInput"
+        @keydown="handleTextareaKeydown"
       ></textarea>
       <button
         type="submit"
@@ -134,6 +136,15 @@ const adjustTextareaHeight = () => {
 
 const handleTextareaInput = () => {
   adjustTextareaHeight()
+}
+
+const handleTextareaKeydown = (event: KeyboardEvent) => {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) {
+    return
+  }
+
+  event.preventDefault()
+  handleTextSubmit()
 }
 
 const handleOptionSelect = (id: string, label: string) => {

@@ -75,15 +75,16 @@
         </svg>
         设置
       </router-link>
-      <button
-        @click="handleLogout"
+      <router-link
+        to="/admin"
         class="md-btn md-btn-text md-ripple"
       >
         <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 3l7 4v5c0 5-3.5 8.5-7 9-3.5-.5-7-4-7-9V7l7-4z" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9.5 12.5l1.5 1.5 3.5-3.5" />
         </svg>
-        退出登录
-      </button>
+        管理后台
+      </router-link>
     </div>
 
     <!-- Main Content -->
@@ -150,7 +151,6 @@
 import { ref, onMounted, computed } from 'vue'
 import { marked } from 'marked'
 import { useRouter } from 'vue-router'
-import { useAuthStore } from '../stores/auth'
 import { getLatestUpdates } from '../api/updates'
 import type { UpdateLog } from '../api/updates'
 
@@ -162,7 +162,6 @@ marked.setOptions({
 const renderMarkdown = (md: string) => marked.parse(md)
 
 const router = useRouter()
-const authStore = useAuthStore()
 
 const showModal = ref(false)
 const updateLogs = ref<UpdateLog[]>([])
@@ -201,11 +200,6 @@ const closeModal = () => {
 const hideModalToday = () => {
   localStorage.setItem('hideAnnouncement', new Date().toDateString())
   closeModal()
-}
-
-const handleLogout = () => {
-  authStore.logout()
-  router.push('/login')
 }
 
 const goToInspiration = () => {

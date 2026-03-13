@@ -16,6 +16,7 @@ class LLMConfigCreate(LLMConfigBase):
 
 class LLMConfigRead(LLMConfigBase):
     user_id: int
+    has_api_key: bool = Field(default=False, description="是否已保存自定义 LLM API Key")
 
     class Config:
         from_attributes = True
@@ -23,4 +24,4 @@ class LLMConfigRead(LLMConfigBase):
 
 class ModelListRequest(BaseModel):
     llm_provider_url: Optional[str] = Field(default=None, description="LLM 服务地址")
-    llm_provider_api_key: str = Field(..., description="LLM API Key")
+    llm_provider_api_key: Optional[str] = Field(default=None, description="LLM API Key")

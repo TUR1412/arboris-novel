@@ -1,6 +1,5 @@
 // AIMETA P=小说API客户端_小说和章节接口|R=小说CRUD_章节管理_生成|NR=不含UI逻辑|E=api:novel|X=internal|A=novelApi对象|D=axios|S=net|RD=./README.ai
 import { useAuthStore } from '@/stores/auth'
-import router from '@/router'
 
 // API 配置
 // 在生产环境中使用相对路径，在开发环境中使用绝对路径
@@ -27,10 +26,7 @@ const request = async (url: string, options: RequestInit = {}) => {
   const response = await fetch(url, { ...options, headers })
 
   if (response.status === 401) {
-    // Token 失效或未授权
-    authStore.logout()
-    router.push('/login')
-    throw new Error('会话已过期，请重新登录')
+    throw new Error('请求未授权，请检查本地管理员状态')
   }
 
   if (!response.ok) {

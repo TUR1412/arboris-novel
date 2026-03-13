@@ -190,6 +190,7 @@
                 章节标题
               </label>
               <input
+                ref="newChapterTitleInput"
                 id="new-chapter-title"
                 v-model="newChapterTitle"
                 type="text"
@@ -233,13 +234,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, h } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, h, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useNovelStore } from '@/stores/novel'
 import { NovelAPI } from '@/api/novel'
 import { AdminAPI } from '@/api/admin'
 import type { NovelProject, NovelSectionResponse, NovelSectionType, AllSectionType } from '@/api/novel'
 import { formatDateTime } from '@/utils/date'
+import { globalAlert } from '@/composables/useAlert'
 import BlueprintEditModal from '@/components/BlueprintEditModal.vue'
 import OverviewSection from '@/components/novel-detail/OverviewSection.vue'
 import WorldSettingSection from '@/components/novel-detail/WorldSettingSection.vue'
@@ -372,6 +374,7 @@ const modalField = ref('')
 const isAddChapterModalOpen = ref(false)
 const newChapterTitle = ref('')
 const newChapterSummary = ref('')
+const newChapterTitleInput = ref<HTMLInputElement | null>(null)
 const originalBodyOverflow = ref('')
 
 const novel = computed(() => !props.isAdmin ? novelStore.currentProject as NovelProject | null : null)
@@ -535,8 +538,10 @@ const handleSave = async (data: { field: string; content: any }) => {
       await loadSection('overview', true)
     }
     isModalOpen.value = false
+    await globalAlert.showSuccess('内容已保存')
   } catch (error) {
     console.error('保存变更失败:', error)
+    await globalAlert.showError(`保存变更失败: ${error instanceof Error ? error.message : '未知错误'}`, '保存失败')
   }
 }
 
@@ -560,7 +565,7 @@ const saveNewChapter = async () => {
   const project = novel.value
   if (!project) return
   if (!newChapterTitle.value.trim()) {
-    alert('章节标题不能为空')
+    await globalAlert.showError('章节标题不能为空', '无法新增章节')
     return
   }
 
@@ -577,14 +582,37 @@ const saveNewChapter = async () => {
     novelStore.setCurrentProject(updatedProject)
     await loadSection('chapter_outline', true)
     isAddChapterModalOpen.value = false
+    await globalAlert.showSuccess('章节大纲已新增')
   } catch (error) {
     console.error('新增章节失败:', error)
+    await globalAlert.showError(`新增章节失败: ${error instanceof Error ? error.message : '未知错误'}`, '新增失败')
   }
 }
+
+const handleWindowKeydown = (event: KeyboardEvent) => {
+  if (!isAddChapterModalOpen.value || props.isAdmin) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    cancelNewChapter()
+    return
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault()
+    void saveNewChapter()
+  }
+}
+
+watch(isAddChapterModalOpen, async (opened) => {
+  if (!opened) return
+  await nextTick()
+  newChapterTitleInput.value?.focus()
+  newChapterTitleInput.value?.select()
+})
 
 onMounted(async () => {
   if (typeof window !== 'undefined') {
     window.addEventListener('resize', handleResize)
+    window.addEventListener('keydown', handleWindowKeydown)
   }
   if (typeof document !== 'undefined') {
     originalBodyOverflow.value = document.body.style.overflow
@@ -599,6 +627,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (typeof window !== 'undefined') {
     window.removeEventListener('resize', handleResize)
+    window.removeEventListener('keydown', handleWindowKeydown)
   }
   if (typeof document !== 'undefined') {
     document.body.style.overflow = originalBodyOverflow.value || ''

@@ -15,6 +15,7 @@
         <div>
           <label for="chapter-title" class="md-text-field-label mb-2">章节标题</label>
           <input
+            ref="titleInputRef"
             type="text"
             id="chapter-title"
             v-model="editableChapter.title"
@@ -47,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import type { ChapterOutline } from '@/api/novel'
 
 interface Props {
@@ -59,6 +60,7 @@ const props = defineProps<Props>()
 const emit = defineEmits(['close', 'save'])
 
 const editableChapter = ref<ChapterOutline | null>(null)
+const titleInputRef = ref<HTMLInputElement | null>(null)
 
 watch(() => props.chapter, (newChapter) => {
   if (newChapter) {
@@ -67,6 +69,14 @@ watch(() => props.chapter, (newChapter) => {
     editableChapter.value = null
   }
 }, { deep: true, immediate: true })
+
+watch(() => props.show, async (visible) => {
+  if (visible) {
+    await nextTick()
+    titleInputRef.value?.focus()
+    titleInputRef.value?.select()
+  }
+}, { immediate: true })
 
 const isChanged = computed(() => {
   if (!props.chapter || !editableChapter.value) {
@@ -80,6 +90,31 @@ const saveChanges = () => {
     emit('save', editableChapter.value)
   }
 }
+
+const handleWindowKeydown = (event: KeyboardEvent) => {
+  if (!props.show) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    emit('close')
+    return
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault()
+    saveChanges()
+  }
+}
+
+onMounted(() => {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('keydown', handleWindowKeydown)
+  }
+})
+
+onBeforeUnmount(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('keydown', handleWindowKeydown)
+  }
+})
 </script>
 
 <style scoped>

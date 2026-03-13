@@ -213,7 +213,7 @@ const cleanVersionContent = (content: string): string => {
         return null
       }
       if (typeof value === 'object') {
-        for (const key of ['content', 'chapter_content', 'chapter_text', 'text', 'body', 'story']) {
+        for (const key of ['content', 'chapter_content', 'chapter_text', 'text', 'body', 'story', 'parsed_json', 'result', 'data']) {
           if (value[key]) {
             const nested = extractContent(value[key])
             if (nested) return nested
@@ -226,6 +226,8 @@ const cleanVersionContent = (content: string): string => {
     if (extracted) {
       // 如果是章节对象/数组，提取正文
       content = extracted
+    } else if (typeof parsed === 'object' && parsed && ('guardrail' in parsed || 'chapter_mission' in parsed || 'parsed_json' in parsed)) {
+      return ''
     }
   } catch (error) {
     // 如果不是JSON，继续处理字符串
@@ -247,7 +249,7 @@ const canGenerateChapter = (chapterNumber: number) => {
   if (!project.value?.blueprint?.chapter_outline) return false
 
   // 检查前面所有章节是否都已成功生成
-  const outlines = project.value.blueprint.chapter_outline.sort((a, b) => a.chapter_number - b.chapter_number)
+  const outlines = [...project.value.blueprint.chapter_outline].sort((a, b) => a.chapter_number - b.chapter_number)
   
   for (const outline of outlines) {
     if (outline.chapter_number >= chapterNumber) break
@@ -402,6 +404,7 @@ const generateChapter = async (chapterNumber: number) => {
     return
   }
 
+  let temporaryChapterIndex = -1
   try {
     generatingChapter.value = chapterNumber
     selectedChapterNumber.value = chapterNumber
@@ -423,6 +426,7 @@ const generateChapter = async (chapterNumber: number) => {
           evaluation: null,
           generation_status: 'generating'
         } as Chapter)
+        temporaryChapterIndex = project.value.chapters.length - 1
       }
     }
 
@@ -438,9 +442,13 @@ const generateChapter = async (chapterNumber: number) => {
 
     // 错误状态的本地更新仍然是必要的，以立即反映UI
     if (project.value?.chapters) {
-      const chapter = project.value.chapters.find(ch => ch.chapter_number === chapterNumber)
-      if (chapter) {
-        chapter.generation_status = 'failed'
+      if (temporaryChapterIndex >= 0 && project.value.chapters[temporaryChapterIndex]?.chapter_number === chapterNumber) {
+        project.value.chapters.splice(temporaryChapterIndex, 1)
+      } else {
+        const chapter = project.value.chapters.find(ch => ch.chapter_number === chapterNumber)
+        if (chapter) {
+          chapter.generation_status = 'failed'
+        }
       }
     }
 
@@ -559,18 +567,19 @@ const deleteChapter = async (chapterNumbers: number | number[]) => {
     ? `您确定要删除选中的 ${numbersToDelete.length} 个章节吗？这个操作无法撤销。`
     : `您确定要删除第 ${numbersToDelete[0]} 章吗？这个操作无法撤销。`
 
-  if (window.confirm(confirmationMessage)) {
-    try {
-      await novelStore.deleteChapter(numbersToDelete)
-      globalAlert.showSuccess('章节已删除', '操作成功')
-      // If the currently selected chapter was deleted, unselect it
-      if (selectedChapterNumber.value && numbersToDelete.includes(selectedChapterNumber.value)) {
-        selectedChapterNumber.value = null
-      }
-    } catch (error) {
-      console.error('删除章节失败:', error)
-      globalAlert.showError(`删除章节失败: ${error instanceof Error ? error.message : '未知错误'}`, '删除失败')
+  const confirmed = await globalAlert.showConfirm(confirmationMessage, '删除章节确认')
+  if (!confirmed) return
+
+  try {
+    await novelStore.deleteChapter(numbersToDelete)
+    globalAlert.showSuccess('章节已删除', '操作成功')
+    // If the currently selected chapter was deleted, unselect it
+    if (selectedChapterNumber.value && numbersToDelete.includes(selectedChapterNumber.value)) {
+      selectedChapterNumber.value = null
     }
+  } catch (error) {
+    console.error('删除章节失败:', error)
+    globalAlert.showError(`删除章节失败: ${error instanceof Error ? error.message : '未知错误'}`, '删除失败')
   }
 }
 
@@ -578,15 +587,20 @@ const generateOutline = async () => {
   showGenerateOutlineModal.value = true
 }
 
-const editChapterContent = async (data: { chapterNumber: number, content: string }) => {
+const editChapterContent = async (data: {
+  chapterNumber: number
+  content: string
+  onSuccess?: () => Promise<void> | void
+  onError?: (message?: string) => Promise<void> | void
+}) => {
   if (!project.value) return
 
   try {
     await novelStore.editChapterContent(project.value.id, data.chapterNumber, data.content)
-    globalAlert.showSuccess('章节内容已更新', '保存成功')
+    await data.onSuccess?.()
   } catch (error) {
     console.error('编辑章节内容失败:', error)
-    globalAlert.showError(`编辑章节内容失败: ${error instanceof Error ? error.message : '未知错误'}`, '保存失败')
+    await data.onError?.(`编辑章节内容失败: ${error instanceof Error ? error.message : '未知错误'}`)
   }
 }
 

@@ -4,6 +4,7 @@ from typing import Optional
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.config import settings
 from ..core.security import hash_password
 from ..models import User
 from ..repositories.user_repository import UserRepository
@@ -16,6 +17,10 @@ class UserService:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.repo = UserRepository(session)
+
+    @staticmethod
+    def _is_local_single_user_account(user: User) -> bool:
+        return user.username == settings.admin_default_username
 
     async def create_user(self, payload: UserCreate, *, external_id: str | None = None) -> UserInDB:
         hashed_password = hash_password(payload.password)
@@ -90,6 +95,13 @@ class UserService:
             return None
 
         update_data = payload.model_dump(exclude_unset=True)
+        if self._is_local_single_user_account(user):
+            if "username" in update_data and update_data["username"] != user.username:
+                raise ValueError("本机单用户模式下不能修改默认管理员用户名")
+            if "is_admin" in update_data and not update_data["is_admin"]:
+                raise ValueError("本机单用户模式下不能取消默认管理员权限")
+            if "is_active" in update_data and not update_data["is_active"]:
+                raise ValueError("本机单用户模式下不能停用默认管理员账号")
         if "password" in update_data and update_data["password"]:
             update_data["hashed_password"] = hash_password(update_data.pop("password"))
 
@@ -107,6 +119,8 @@ class UserService:
         if not user:
             return False
             
+        if self._is_local_single_user_account(user):
+            raise ValueError("本机单用户模式下不能删除默认管理员账号")
         if user.is_admin:
             raise ValueError("无法删除管理员账号")
             

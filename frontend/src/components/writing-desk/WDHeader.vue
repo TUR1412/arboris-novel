@@ -32,11 +32,12 @@
             <span class="hidden md:inline">项目详情</span>
           </button>
           <div class="w-px h-6 hidden sm:block" style="background-color: var(--md-outline-variant);"></div>
-          <button @click="handleLogout" class="md-btn md-btn-text md-ripple flex items-center gap-2">
+          <button @click="goAdmin" class="md-btn md-btn-text md-ripple flex items-center gap-2">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 3l7 4v5c0 5-3.5 8.5-7 9-3.5-.5-7-4-7-9V7l7-4z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.5 12.5l1.5 1.5 3.5-3.5" />
             </svg>
-            <span class="hidden md:inline">退出登录</span>
+            <span class="hidden md:inline">管理后台</span>
           </button>
           <button
             @click="$emit('toggleSidebar')"
@@ -54,15 +55,12 @@
 
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
 import type { NovelProject } from '@/api/novel'
 
 const router = useRouter()
-const authStore = useAuthStore()
 
-const handleLogout = () => {
-  authStore.logout()
-  router.push('/login')
+const goAdmin = () => {
+  router.push('/admin')
 }
 
 interface Props {

@@ -3,6 +3,7 @@ import { defineStore } from 'pinia';
 import { API_BASE_URL } from '@/api/novel';
 
 const API_URL = `${API_BASE_URL}/api/auth`;
+const LOCAL_SINGLE_USER_TOKEN = 'local-single-user';
 
 interface AuthOptions {
   // 是否允许用户自助注册
@@ -39,105 +40,78 @@ interface User {
   must_change_password: boolean;
 }
 
+const createLocalUser = (): User => ({
+  id: 1,
+  username: 'admin',
+  is_admin: true,
+  must_change_password: false,
+});
+
 export const useAuthStore = defineStore('auth', {
   state: () => ({
-    token: localStorage.getItem('token') || null as string | null,
-    user: null as User | null,
-    authOptions: null as AuthOptions | null,
-    authOptionsLoaded: false,
+    token: LOCAL_SINGLE_USER_TOKEN as string | null,
+    user: createLocalUser() as User | null,
+    authOptions: {
+      allow_registration: false,
+      enable_linuxdo_login: false,
+    } as AuthOptions | null,
+    authOptionsLoaded: true,
   }),
   getters: {
-    isAuthenticated: (state) => !!state.token,
-    allowRegistration: (state) => state.authOptions?.allow_registration ?? true,
+    isAuthenticated: () => true,
+    allowRegistration: (state) => state.authOptions?.allow_registration ?? false,
     enableLinuxdoLogin: (state) => state.authOptions?.enable_linuxdo_login ?? false,
     mustChangePassword: (state) => state.user?.must_change_password ?? false,
   },
   actions: {
+    ensureLocalSession() {
+      this.token = LOCAL_SINGLE_USER_TOKEN;
+      localStorage.setItem('token', LOCAL_SINGLE_USER_TOKEN);
+      if (!this.user) {
+        this.user = createLocalUser();
+      }
+    },
     async fetchAuthOptions(force = false) {
-      // 拉取后端认证相关开关，供前端动态渲染
       if (this.authOptionsLoaded && !force) {
         return;
       }
-      try {
-        const response = await fetch(`${API_URL}/options`);
-        if (!response.ok) {
-          throw new Error('读取认证开关失败');
-        }
-        const data = await response.json() as AuthOptions;
-        this.authOptions = data;
-      } catch (error) {
-        console.error('获取认证配置失败，将使用默认值', error);
-        this.authOptions = {
-          allow_registration: true,
-          enable_linuxdo_login: false,
-        };
-      } finally {
-        this.authOptionsLoaded = true;
-      }
+      this.ensureLocalSession();
+      this.authOptions = {
+        allow_registration: false,
+        enable_linuxdo_login: false,
+      };
+      this.authOptionsLoaded = true;
     },
     async login(username: string, password: string): Promise<boolean> {
-      const params = new URLSearchParams();
-      params.append('username', username);
-      params.append('password', password);
-
-      const response = await fetchWithAuth(`${API_URL}/token`, {
-        method: 'POST',
-        body: params,
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to login');
-      }
-
-      const data = await response.json();
-      this.token = data.access_token;
-      if (this.token) {
-        localStorage.setItem('token', this.token);
-      }
-      const mustChangePassword = Boolean(data.must_change_password);
       await this.fetchUser();
-      if (this.user) {
-        this.user.must_change_password = mustChangePassword || this.user.must_change_password;
-      }
-      return mustChangePassword;
+      return false;
     },
-    // 当前注册流程在 Register.vue 中实现，此处预留方法以兼容旧逻辑
     async register(payload: { username: string; email: string; password: string; verification_code: string }) {
-      const response = await fetch(`${API_URL}/users`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const detail = errorData.detail || 'Failed to register';
-        throw new Error(detail);
-      }
+      void payload;
+      throw new Error('本地单用户模式已关闭注册功能');
     },
     logout() {
-      this.token = null;
-      this.user = null;
-      localStorage.removeItem('token');
+      this.ensureLocalSession();
     },
     async fetchUser() {
-      if (this.token) {
-        try {
-          const response = await fetchWithAuth(`${API_URL}/users/me`);
+      this.ensureLocalSession();
+      try {
+        const response = await fetchWithAuth(`${API_URL}/users/me`);
 
-          if (!response.ok) {
-            throw new Error('Failed to fetch user');
-          }
-
-          const userData = await response.json();
-          this.user = {
-            id: userData.id,
-            username: userData.username,
-            is_admin: userData.is_admin || false,
-            must_change_password: userData.must_change_password || false,
-          };
-        } catch (error) {
-          this.logout();
+        if (!response.ok) {
+          throw new Error('Failed to fetch user');
         }
+
+        const userData = await response.json();
+        this.user = {
+          id: userData.id,
+          username: userData.username,
+          is_admin: userData.is_admin || true,
+          must_change_password: false,
+        };
+      } catch (error) {
+        console.warn('读取本地管理员信息失败，将使用默认本地身份', error);
+        this.user = createLocalUser();
       }
     },
   },

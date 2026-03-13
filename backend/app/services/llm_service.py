@@ -1,6 +1,5 @@
 # AIMETA P=LLM服务_大模型调用封装|R=API调用_流式生成|NR=不含业务逻辑|E=LLMService|X=internal|A=服务类|D=openai,httpx|S=net|RD=./README.ai
 import logging
-import os
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -8,6 +7,7 @@ from fastapi import HTTPException, status
 from openai import APIConnectionError, APITimeoutError, AsyncOpenAI, InternalServerError
 
 from ..core.config import settings
+from ..repositories.embedding_config_repository import EmbeddingConfigRepository
 from ..repositories.llm_config_repository import LLMConfigRepository
 from ..repositories.system_config_repository import SystemConfigRepository
 from ..repositories.user_repository import UserRepository
@@ -29,6 +29,7 @@ class LLMService:
 
     def __init__(self, session):
         self.session = session
+        self.embedding_repo = EmbeddingConfigRepository(session)
         self.llm_repo = LLMConfigRepository(session)
         self.system_config_repo = SystemConfigRepository(session)
         self.user_repo = UserRepository(session)
@@ -222,22 +223,18 @@ class LLMService:
         return full_response
 
     async def _resolve_llm_config(self, user_id: Optional[int]) -> Dict[str, Optional[str]]:
-        if user_id:
-            config = await self.llm_repo.get_by_user(user_id)
-            if config and config.llm_provider_api_key:
-                return {
-                    "api_key": config.llm_provider_api_key,
-                    "base_url": config.llm_provider_url,
-                    "model": config.llm_provider_model,
-                }
-
-        # 检查每日使用次数限制
-        if user_id:
+        user_config = await self.llm_repo.get_by_user(user_id) if user_id else None
+        user_api_key = user_config.llm_provider_api_key if user_config else None
+        if user_id and not user_api_key:
             await self._enforce_daily_limit(user_id)
 
-        api_key = await self._get_config_value("llm.api_key")
-        base_url = await self._get_config_value("llm.base_url")
-        model = await self._get_config_value("llm.model")
+        api_key = user_api_key or await self._get_config_value("llm.api_key")
+        base_url = (
+            user_config.llm_provider_url if user_config and user_config.llm_provider_url else None
+        ) or await self._get_config_value("llm.base_url")
+        model = (
+            user_config.llm_provider_model if user_config and user_config.llm_provider_model else None
+        ) or await self._get_config_value("llm.model")
 
         if not api_key:
             logger.error("未配置默认 LLM API Key，且用户 %s 未设置自定义 API Key", user_id)
@@ -256,23 +253,18 @@ class LLMService:
         model: Optional[str] = None,
     ) -> List[float]:
         """生成文本向量，用于章节 RAG 检索，支持 openai 与 ollama 双提供方。"""
-        provider = await self._get_config_value("embedding.provider") or "openai"
-        default_model = (
-            await self._get_config_value("ollama.embedding_model") or "nomic-embed-text:latest"
-            if provider == "ollama"
-            else await self._get_config_value("embedding.model") or "text-embedding-3-large"
+        config = await self._resolve_embedding_config(user_id)
+        provider = config["provider"] or "openai"
+        target_model = model or config["model"] or (
+            "nomic-embed-text:latest" if provider == "ollama" else "text-embedding-3-large"
         )
-        target_model = model or default_model
 
         if provider == "ollama":
             if OllamaAsyncClient is None:
                 logger.error("未安装 ollama 依赖，无法调用本地嵌入模型。")
                 raise HTTPException(status_code=500, detail="缺少 Ollama 依赖，请先安装 ollama 包。")
 
-            base_url = (
-                await self._get_config_value("ollama.embedding_base_url")
-                or await self._get_config_value("embedding.base_url")
-            )
+            base_url = config["base_url"] or "http://127.0.0.1:11434"
             client = OllamaAsyncClient(host=base_url)
             try:
                 response = await client.embeddings(model=target_model, prompt=text)
@@ -296,9 +288,11 @@ class LLMService:
             if not isinstance(embedding, list):
                 embedding = list(embedding)
         else:
-            config = await self._resolve_llm_config(user_id)
-            api_key = await self._get_config_value("embedding.api_key") or config["api_key"]
-            base_url = await self._get_config_value("embedding.base_url") or config.get("base_url")
+            api_key = config["api_key"]
+            base_url = config["base_url"]
+            if not api_key:
+                logger.error("未配置可用的嵌入模型 API Key，用户=%s", user_id)
+                return []
             client = AsyncOpenAI(api_key=api_key, base_url=base_url)
             try:
                 response = await client.embeddings.create(
@@ -325,7 +319,7 @@ class LLMService:
 
         dimension = len(embedding)
         if not dimension:
-            vector_size_str = await self._get_config_value("embedding.model_vector_size")
+            vector_size_str = config["vector_size"]
             if vector_size_str:
                 dimension = int(vector_size_str)
         if dimension:
@@ -334,17 +328,72 @@ class LLMService:
 
     async def get_embedding_dimension(self, model: Optional[str] = None) -> Optional[int]:
         """获取嵌入向量维度，优先返回缓存结果，其次读取配置。"""
-        provider = await self._get_config_value("embedding.provider") or "openai"
-        default_model = (
-            await self._get_config_value("ollama.embedding_model") or "nomic-embed-text:latest"
-            if provider == "ollama"
-            else await self._get_config_value("embedding.model") or "text-embedding-3-large"
+        config = await self._resolve_embedding_config(user_id=None)
+        provider = config["provider"] or "openai"
+        target_model = model or config["model"] or (
+            "nomic-embed-text:latest" if provider == "ollama" else "text-embedding-3-large"
         )
-        target_model = model or default_model
         if target_model in self._embedding_dimensions:
             return self._embedding_dimensions[target_model]
-        vector_size_str = await self._get_config_value("embedding.model_vector_size")
+        vector_size_str = config["vector_size"]
         return int(vector_size_str) if vector_size_str else None
+
+    async def _resolve_embedding_config(self, user_id: Optional[int]) -> Dict[str, Optional[str]]:
+        user_config = await self.embedding_repo.get_by_user(user_id) if user_id else None
+        user_llm_config = await self.llm_repo.get_by_user(user_id) if user_id else None
+
+        provider = (
+            user_config.embedding_provider if user_config and user_config.embedding_provider else None
+        ) or await self._get_config_value("embedding.provider") or "openai"
+        provider = provider.lower()
+
+        user_base_url = user_config.embedding_base_url if user_config else None
+        user_api_key = user_config.embedding_api_key if user_config else None
+        user_model = user_config.embedding_model if user_config else None
+        user_vector_size = (
+            str(user_config.embedding_model_vector_size)
+            if user_config and user_config.embedding_model_vector_size
+            else None
+        )
+
+        user_llm_api_key = (
+            user_llm_config.llm_provider_api_key if user_llm_config and user_llm_config.llm_provider_api_key else None
+        )
+        user_llm_base_url = (
+            user_llm_config.llm_provider_url if user_llm_config and user_llm_config.llm_provider_url else None
+        )
+
+        system_embedding_api_key = await self._get_config_value("embedding.api_key")
+        system_embedding_base_url = await self._get_config_value("embedding.base_url")
+        system_embedding_model = await self._get_config_value("embedding.model")
+        system_embedding_vector_size = await self._get_config_value("embedding.model_vector_size")
+        system_ollama_base_url = await self._get_config_value("ollama.embedding_base_url")
+        system_ollama_model = await self._get_config_value("ollama.embedding_model")
+        system_llm_api_key = await self._get_config_value("llm.api_key")
+        system_llm_base_url = await self._get_config_value("llm.base_url")
+
+        if provider == "ollama":
+            return {
+                "provider": "ollama",
+                "api_key": None,
+                "base_url": user_base_url
+                or system_ollama_base_url
+                or system_embedding_base_url
+                or "http://127.0.0.1:11434",
+                "model": user_model or system_ollama_model or system_embedding_model or "nomic-embed-text:latest",
+                "vector_size": user_vector_size or system_embedding_vector_size,
+            }
+
+        if user_id and not (user_api_key or user_llm_api_key):
+            await self._enforce_daily_limit(user_id)
+
+        return {
+            "provider": "openai",
+            "api_key": user_api_key or user_llm_api_key or system_embedding_api_key or system_llm_api_key,
+            "base_url": user_base_url or user_llm_base_url or system_embedding_base_url or system_llm_base_url,
+            "model": user_model or system_embedding_model or "text-embedding-3-large",
+            "vector_size": user_vector_size or system_embedding_vector_size,
+        }
 
     async def _enforce_daily_limit(self, user_id: int) -> None:
         limit_str = await self.admin_setting_service.get("daily_request_limit", "100")
@@ -362,6 +411,22 @@ class LLMService:
         record = await self.system_config_repo.get_by_key(key)
         if record:
             return record.value
-        # 兼容环境变量，首次迁移时无需立即写入数据库
-        env_key = key.upper().replace(".", "_")
-        return os.getenv(env_key)
+        fallback_map = {
+            "llm.api_key": settings.openai_api_key,
+            "llm.base_url": str(settings.openai_base_url) if settings.openai_base_url else None,
+            "llm.model": settings.openai_model_name,
+            "embedding.provider": settings.embedding_provider,
+            "embedding.api_key": settings.embedding_api_key,
+            "embedding.base_url": str(settings.embedding_base_url) if settings.embedding_base_url else None,
+            "embedding.model": settings.embedding_model,
+            "embedding.model_vector_size": (
+                str(settings.embedding_model_vector_size)
+                if settings.embedding_model_vector_size is not None
+                else None
+            ),
+            "ollama.embedding_base_url": (
+                str(settings.ollama_embedding_base_url) if settings.ollama_embedding_base_url else None
+            ),
+            "ollama.embedding_model": settings.ollama_embedding_model,
+        }
+        return fallback_map.get(key)

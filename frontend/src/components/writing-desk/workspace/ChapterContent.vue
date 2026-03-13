@@ -264,7 +264,7 @@ const cleanVersionContent = (content: string): string => {
         return null
       }
       if (typeof value === 'object') {
-        for (const key of ['content', 'chapter_content', 'chapter_text', 'text', 'body', 'story']) {
+        for (const key of ['content', 'chapter_content', 'chapter_text', 'text', 'body', 'story', 'parsed_json', 'result', 'data']) {
           if (value[key]) {
             const nested = extractContent(value[key])
             if (nested) return nested
@@ -276,6 +276,8 @@ const cleanVersionContent = (content: string): string => {
     const extracted = extractContent(parsed)
     if (extracted) {
       content = extracted
+    } else if (typeof parsed === 'object' && parsed && ('guardrail' in parsed || 'chapter_mission' in parsed || 'parsed_json' in parsed)) {
+      return ''
     }
   } catch (error) {
     // not a json

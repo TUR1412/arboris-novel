@@ -31,6 +31,15 @@ async def init_db() -> None:
 
     # ---- 第二步：确保管理员账号至少存在一个 ----
     async with AsyncSessionLocal() as session:
+        local_admin = await session.scalar(
+            select(User).where(User.username == settings.admin_default_username)
+        )
+        if local_admin:
+            local_admin.is_admin = True
+            local_admin.is_active = True
+            if settings.admin_default_email and not local_admin.email:
+                local_admin.email = settings.admin_default_email
+
         admin_exists = await session.execute(select(User).where(User.is_admin.is_(True)))
         if not admin_exists.scalars().first():
             logger.warning("未检测到管理员账号，正在创建默认管理员 ...")

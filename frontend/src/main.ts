@@ -19,17 +19,9 @@ const pinia = createPinia()
 app.use(pinia)
 app.use(router)
 
-// Handle token from URL
-const urlParams = new URLSearchParams(window.location.search)
-const token = urlParams.get('token')
-
-if (token) {
-  const authStore = useAuthStore()
-  authStore.token = token
-  localStorage.setItem('token', token)
-  // Clean the URL
-  window.history.replaceState({}, document.title, "/")
-  authStore.fetchUser()
-}
+const authStore = useAuthStore()
+authStore.fetchUser().catch((error) => {
+  console.warn('初始化本地单用户身份失败，将继续使用默认本地身份', error)
+})
 
 app.mount('#app')

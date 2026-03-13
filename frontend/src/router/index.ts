@@ -5,8 +5,6 @@ import NovelWorkspace from '../views/NovelWorkspace.vue'
 import InspirationMode from '../views/InspirationMode.vue'
 import WritingDesk from '../views/WritingDesk.vue'
 import NovelDetail from '../views/NovelDetail.vue'
-import Login from '../views/Login.vue'
-import Register from '../views/Register.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const router = createRouter({
@@ -46,13 +44,11 @@ const router = createRouter({
     },
     {
       path: '/login',
-      name: 'login',
-      component: Login,
+      redirect: '/',
     },
     {
       path: '/register',
-      name: 'register',
-      component: Register,
+      redirect: '/',
     },
     {
       path: '/admin',
@@ -76,35 +72,24 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach(async (to, from, next) => {
+router.beforeEach(async (to) => {
   const authStore = useAuthStore()
-  
-  // Attempt to fetch user info if token exists but user info is not loaded
   if (authStore.token && !authStore.user) {
     await authStore.fetchUser()
   }
 
-  const requiresAuth = to.matched.some(record => record.meta.requiresAuth)
   const requiresAdmin = to.matched.some(record => record.meta.requiresAdmin)
-  const isAuthenticated = authStore.isAuthenticated
-  const isAdmin = authStore.user?.is_admin
+  const isAdmin = authStore.user?.is_admin ?? true
 
-  const mustChangePassword = authStore.user?.is_admin && authStore.mustChangePassword
+  if (to.path === '/login' || to.path === '/register') {
+    return { path: '/' }
+  }
 
-  if (requiresAuth && !isAuthenticated) {
-    next('/login')
-  } else if (requiresAdmin && !isAdmin) {
-    next('/') // Redirect to a non-admin page if not an admin
-  } else if (isAuthenticated && mustChangePassword) {
-    if (to.name !== 'admin' || to.query.tab !== 'password') {
-      next({ name: 'admin', query: { tab: 'password' } })
-    } else {
-      next()
-    }
+  if (requiresAdmin && !isAdmin) {
+    return { path: '/' }
   }
-  else {
-    next()
-  }
+
+  return true
 })
 
 export default router

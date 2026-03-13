@@ -70,7 +70,7 @@
     </div>
 
     <!-- 编辑章节内容模态框 -->
-    <div v-if="showEditModal" class="md-dialog-overlay">
+    <div v-if="showEditModal" class="md-dialog-overlay" @click.self="closeEditModal">
       <div class="md-dialog w-full h-full max-w-5xl m3-editor-dialog">
         <!-- 模态框头部 -->
         <div class="flex items-center justify-between p-6 border-b" style="border-bottom-color: var(--md-outline-variant);">
@@ -94,6 +94,7 @@
               章节内容
             </label>
             <textarea
+              ref="editTextareaRef"
               v-model="editingContent"
               class="md-textarea flex-1 w-full resize-none"
               placeholder="请输入章节内容..."
@@ -131,7 +132,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onUnmounted } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { globalAlert } from '@/composables/useAlert'
 import type { Chapter, ChapterOutline, ChapterGenerationResponse, ChapterVersion, NovelProject } from '@/api/novel'
 import WorkspaceInitial from './workspace/WorkspaceInitial.vue'
@@ -180,6 +181,7 @@ const confirmRegenerateChapter = async () => {
 const showEditModal = ref(false)
 const editingContent = ref('')
 const isSaving = ref(false)
+const editTextareaRef = ref<HTMLTextAreaElement | null>(null)
 
 // 清理版本内容的辅助函数
 const cleanVersionContent = (content: string): string => {
@@ -225,6 +227,9 @@ const openEditModal = () => {
   if (selectedChapter.value?.content) {
     editingContent.value = cleanVersionContent(selectedChapter.value.content)
     showEditModal.value = true
+    nextTick(() => {
+      editTextareaRef.value?.focus()
+    })
   }
 }
 
@@ -238,16 +243,30 @@ const saveEditedContent = async () => {
   if (!props.selectedChapterNumber || !editingContent.value.trim()) return
   
   isSaving.value = true
-  try {
-    emit('editChapter', {
-      chapterNumber: props.selectedChapterNumber,
-      content: editingContent.value
-    })
+  emit('editChapter', {
+    chapterNumber: props.selectedChapterNumber,
+    content: editingContent.value,
+    onSuccess: async () => {
+      await globalAlert.showSuccess('章节内容已更新', '保存成功')
+      closeEditModal()
+    },
+    onError: async (message?: string) => {
+      isSaving.value = false
+      await globalAlert.showError(message || '保存章节内容失败，请稍后重试', '保存失败')
+    }
+  })
+}
+
+const handleWindowKeydown = (event: KeyboardEvent) => {
+  if (!showEditModal.value) return
+  if (event.key === 'Escape' && !isSaving.value) {
+    event.preventDefault()
     closeEditModal()
-  } catch (error) {
-    console.error('保存章节内容失败:', error)
-  } finally {
-    isSaving.value = false
+    return
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+    event.preventDefault()
+    void saveEditedContent()
   }
 }
 
@@ -288,7 +307,7 @@ const isChapterEvaluationFailed = (chapterNumber: number) => {
 const canGenerateChapter = (chapterNumber: number | null) => {
   if (chapterNumber === null || !props.project?.blueprint?.chapter_outline) return false
 
-  const outlines = props.project.blueprint.chapter_outline.sort((a, b) => a.chapter_number - b.chapter_number)
+  const outlines = [...props.project.blueprint.chapter_outline].sort((a, b) => a.chapter_number - b.chapter_number)
   
   for (const outline of outlines) {
     if (outline.chapter_number >= chapterNumber) break
@@ -368,8 +387,17 @@ watch(
   { immediate: true }
 )
 
+onMounted(() => {
+  if (typeof window !== 'undefined') {
+    window.addEventListener('keydown', handleWindowKeydown)
+  }
+})
+
 onUnmounted(() => {
   stopPolling()
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('keydown', handleWindowKeydown)
+  }
 })
 
 const currentComponentProps = computed(() => {

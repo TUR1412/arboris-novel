@@ -64,6 +64,41 @@
           </button>
         </div>
 
+        <div
+          v-if="novelStore.projects.length > 0"
+          class="flex flex-wrap items-center justify-between gap-3 mb-6"
+        >
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              @click="toggleSelectionMode"
+              class="md-btn md-btn-outlined md-ripple"
+            >
+              {{ selectionMode ? '退出批量模式' : '批量管理' }}
+            </button>
+            <template v-if="selectionMode">
+              <button
+                @click="toggleSelectAll"
+                class="md-btn md-btn-text md-ripple"
+              >
+                {{ allProjectsSelected ? '取消全选' : '全选' }}
+              </button>
+              <span class="md-chip md-chip-assist">
+                已选 {{ selectedProjectIds.length }} 项
+              </span>
+            </template>
+          </div>
+
+          <button
+            v-if="selectionMode"
+            @click="handleBatchDelete"
+            :disabled="selectedProjectIds.length === 0"
+            class="md-btn md-btn-filled md-ripple disabled:opacity-50"
+            style="background-color: var(--md-error); color: var(--md-on-error);"
+          >
+            删除选中
+          </button>
+        </div>
+
         <!-- Loading State -->
         <div v-if="novelStore.isLoading" class="flex flex-col items-center justify-center py-16">
           <div class="md-spinner"></div>
@@ -113,10 +148,13 @@
             v-for="project in novelStore.projects"
             :key="project.id"
             :project="project"
+            :selection-mode="selectionMode"
+            :selected="selectedProjectIds.includes(project.id)"
             @click="enterProject(project)"
             @detail="viewProjectDetail"
             @continue="enterProject"
             @delete="handleDeleteProject"
+            @toggleSelect="toggleProjectSelection"
           />
 
           <!-- Create New Project Card -->
@@ -176,7 +214,7 @@
       enter-from-class="opacity-0"
       leave-to-class="opacity-0"
     >
-      <div v-if="showDeleteDialog" class="md-dialog-overlay">
+      <div v-if="showDeleteDialog" class="md-dialog-overlay" @click.self="cancelDelete">
         <transition
           enter-active-class="transition-all duration-300"
           leave-active-class="transition-all duration-200"
@@ -198,7 +236,7 @@
             
             <div class="md-dialog-content">
               <p class="md-body-large" style="color: var(--md-on-surface);">
-                确定要删除项目 "<strong>{{ projectToDelete?.title }}</strong>" 吗？所有相关数据将被永久删除。
+                {{ deleteDialogMessage }}
               </p>
             </div>
             
@@ -230,13 +268,14 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useNovelStore } from '@/stores/novel'
 import { useAuthStore } from '@/stores/auth'
 import ProjectCard from '@/components/ProjectCard.vue'
 import type { NovelProject, NovelProjectSummary } from '@/api/novel'
 import { NovelAPI } from '@/api/novel'
+import { globalAlert } from '@/composables/useAlert'
 
 const router = useRouter()
 const novelStore = useNovelStore()
@@ -249,8 +288,22 @@ const isImporting = ref(false)
 // 删除相关状态
 const showDeleteDialog = ref(false)
 const projectToDelete = ref<NovelProjectSummary | null>(null)
+const deleteTargetIds = ref<string[]>([])
 const isDeleting = ref(false)
 const deleteMessage = ref<{type: 'success' | 'error', text: string} | null>(null)
+const selectionMode = ref(false)
+const selectedProjectIds = ref<string[]>([])
+
+const allProjectsSelected = computed(() => (
+  novelStore.projects.length > 0 && selectedProjectIds.value.length === novelStore.projects.length
+))
+
+const deleteDialogMessage = computed(() => {
+  if (deleteTargetIds.value.length > 1) {
+    return `确定要删除选中的 ${deleteTargetIds.value.length} 个项目吗？所有相关数据将被永久删除。`
+  }
+  return `确定要删除项目 "${projectToDelete.value?.title || ''}" 吗？所有相关数据将被永久删除。`
+})
 
 const goBack = () => {
   router.push('/')
@@ -276,6 +329,14 @@ const loadProjects = async () => {
   await novelStore.loadProjects()
 }
 
+const handleWindowKeydown = (event: KeyboardEvent) => {
+  if (!showDeleteDialog.value) return
+  if (event.key === 'Escape' && !isDeleting.value) {
+    event.preventDefault()
+    cancelDelete()
+  }
+}
+
 // 导入相关方法
 const triggerImport = () => {
   if (isImporting.value) return
@@ -288,7 +349,8 @@ const handleFileImport = async (event: Event) => {
 
   const file = target.files[0]
   if (!file.name.endsWith('.txt')) {
-    alert('请上传 .txt 格式的文件')
+    await globalAlert.showError('请上传 .txt 格式的文件', '导入失败')
+    target.value = ''
     return
   }
 
@@ -299,7 +361,7 @@ const handleFileImport = async (event: Event) => {
     router.push(`/novel/${response.id}`)
   } catch (error: any) {
     console.error('导入失败:', error)
-    alert(error.message || '导入失败，请重试')
+    await globalAlert.showError(error.message || '导入失败，请重试', '导入失败')
   } finally {
     isImporting.value = false
     target.value = ''
@@ -311,24 +373,68 @@ const handleDeleteProject = (projectId: string) => {
   const project = novelStore.projects.find(p => p.id === projectId)
   if (project) {
     projectToDelete.value = project
+    deleteTargetIds.value = [project.id]
     showDeleteDialog.value = true
   }
+}
+
+const toggleSelectionMode = () => {
+  selectionMode.value = !selectionMode.value
+  if (!selectionMode.value) {
+    selectedProjectIds.value = []
+  }
+}
+
+const toggleProjectSelection = (projectId: string) => {
+  if (!selectionMode.value) return
+  const index = selectedProjectIds.value.indexOf(projectId)
+  if (index >= 0) {
+    selectedProjectIds.value.splice(index, 1)
+  } else {
+    selectedProjectIds.value.push(projectId)
+  }
+}
+
+const toggleSelectAll = () => {
+  if (allProjectsSelected.value) {
+    selectedProjectIds.value = []
+    return
+  }
+  selectedProjectIds.value = novelStore.projects.map(project => project.id)
+}
+
+const handleBatchDelete = () => {
+  if (selectedProjectIds.value.length === 0) return
+  deleteTargetIds.value = [...selectedProjectIds.value]
+  projectToDelete.value = null
+  showDeleteDialog.value = true
 }
 
 const cancelDelete = () => {
   showDeleteDialog.value = false
   projectToDelete.value = null
+  deleteTargetIds.value = []
 }
 
 const confirmDelete = async () => {
-  if (!projectToDelete.value) return
+  if (deleteTargetIds.value.length === 0) return
   
   isDeleting.value = true
   try {
-    await novelStore.deleteProjects([projectToDelete.value.id])
-    deleteMessage.value = { type: 'success', text: `项目 "${projectToDelete.value.title}" 已成功删除` }
+    const deletedTitles = novelStore.projects
+      .filter(project => deleteTargetIds.value.includes(project.id))
+      .map(project => project.title)
+    await novelStore.deleteProjects(deleteTargetIds.value)
+    deleteMessage.value = {
+      type: 'success',
+      text: deleteTargetIds.value.length > 1
+        ? `已成功删除 ${deleteTargetIds.value.length} 个项目`
+        : `项目 "${deletedTitles[0] || projectToDelete.value?.title || ''}" 已成功删除`
+    }
     showDeleteDialog.value = false
     projectToDelete.value = null
+    selectedProjectIds.value = selectedProjectIds.value.filter(id => !deleteTargetIds.value.includes(id))
+    deleteTargetIds.value = []
     
     setTimeout(() => {
       deleteMessage.value = null
@@ -347,5 +453,14 @@ const confirmDelete = async () => {
 
 onMounted(() => {
   loadProjects()
+  if (typeof window !== 'undefined') {
+    window.addEventListener('keydown', handleWindowKeydown)
+  }
+})
+
+onBeforeUnmount(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('keydown', handleWindowKeydown)
+  }
 })
 </script>

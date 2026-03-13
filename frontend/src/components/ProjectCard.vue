@@ -2,7 +2,11 @@
 <template>
   <div
     class="md-card md-card-elevated group p-5 flex flex-col justify-between transition-all duration-300 hover:scale-[1.01]"
+    :class="{
+      'ring-2 ring-[var(--md-primary)] bg-[var(--md-primary-container)]': selectionMode && selected
+    }"
     style="border-radius: var(--md-radius-lg);"
+    @click="handleCardClick"
   >
     <div>
       <!-- Header: Icon + Title -->
@@ -26,7 +30,21 @@
             />
           </svg>
         </div>
-        <div class="flex-1 cursor-pointer" @click="$emit('detail', project.id)">
+        <button
+          v-if="selectionMode"
+          type="button"
+          @click.stop="$emit('toggleSelect', project.id)"
+          class="md-icon-btn md-ripple"
+          :title="selected ? '取消选择' : '选择项目'"
+        >
+          <svg v-if="selected" class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.707a1 1 0 00-1.414-1.414L9 10.172 7.707 8.879a1 1 0 10-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+          </svg>
+          <svg v-else class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="9"></circle>
+          </svg>
+        </button>
+        <div class="flex-1 cursor-pointer" @click.stop="handleDetailClick">
           <h3 class="md-title-medium hover:opacity-80 transition-opacity" style="color: var(--md-on-surface);">
             {{ project.title }}
           </h3>
@@ -75,7 +93,10 @@
     </div>
 
     <!-- Action Buttons -->
-    <div class="flex gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 transform translate-y-2 group-hover:translate-y-0">
+    <div
+      v-if="!selectionMode"
+      class="flex gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 transform translate-y-2 group-hover:translate-y-0"
+    >
       <button
         @click.stop="$emit('detail', project.id)"
         class="md-btn md-btn-tonal md-ripple flex-1"
@@ -116,6 +137,8 @@ import { formatDateTime } from '@/utils/date'
 
 interface Props {
   project: NovelProjectSummary
+  selectionMode?: boolean
+  selected?: boolean
 }
 
 const props = defineProps<Props>()
@@ -125,6 +148,7 @@ const emit = defineEmits<{
   (e: 'detail', id: string): void
   (e: 'continue', project: NovelProjectSummary): void
   (e: 'delete', id: string): void
+  (e: 'toggleSelect', id: string): void
 }>()
 
 // Material 3 Color Theming based on genre
@@ -190,5 +214,19 @@ const chapterCount = computed(() => {
 
 const handleDelete = () => {
   emit('delete', props.project.id)
+}
+
+const handleCardClick = () => {
+  if (props.selectionMode) {
+    emit('toggleSelect', props.project.id)
+  }
+}
+
+const handleDetailClick = () => {
+  if (props.selectionMode) {
+    emit('toggleSelect', props.project.id)
+    return
+  }
+  emit('detail', props.project.id)
 }
 </script>

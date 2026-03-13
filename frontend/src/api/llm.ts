@@ -9,12 +9,13 @@ export interface LLMConfig {
   llm_provider_url: string | null;
   llm_provider_api_key: string | null;
   llm_provider_model: string | null;
+  has_api_key: boolean;
 }
 
 export interface LLMConfigCreate {
-  llm_provider_url?: string;
-  llm_provider_api_key?: string;
-  llm_provider_model?: string;
+  llm_provider_url?: string | null;
+  llm_provider_api_key?: string | null;
+  llm_provider_model?: string | null;
 }
 
 const getHeaders = () => {
@@ -63,7 +64,7 @@ export const deleteLLMConfig = async (): Promise<void> => {
 
 export interface ModelListRequest {
   llm_provider_url?: string;
-  llm_provider_api_key: string;
+  llm_provider_api_key?: string;
 }
 
 export const getAvailableModels = async (request: ModelListRequest): Promise<string[]> => {

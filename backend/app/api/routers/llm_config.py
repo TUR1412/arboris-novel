@@ -64,9 +64,14 @@ async def list_models(
 ) -> List[str]:
     """获取可用的模型列表"""
     try:
+        runtime = await service.resolve_runtime_config(
+            user_id=current_user.id,
+            override_api_key=payload.llm_provider_api_key,
+            override_base_url=payload.llm_provider_url,
+        )
         models = await service.get_available_models(
-            api_key=payload.llm_provider_api_key,
-            base_url=payload.llm_provider_url
+            api_key=runtime["api_key"],
+            base_url=runtime["base_url"],
         )
         logger.info("用户 %s 获取模型列表，返回 %d 个模型", current_user.id, len(models))
         return models

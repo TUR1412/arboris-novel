@@ -2,160 +2,106 @@
 """
 嵌入服务 (EmbeddingService)
 
-提供文本向量化功能，支持：
-1. OpenAI 嵌入模型
-2. 本地嵌入模型（可选）
-3. 批量嵌入生成
-
-用于支持向量检索功能。
+优先复用 LLMService 的统一配置解析链，避免出现与设置页不一致的旁路。
+若未传入 session，则退回到兼容模式，仅使用 settings 中的默认配置。
 """
+import hashlib
 import logging
 from typing import List, Optional, Sequence
-import hashlib
 
 from ..core.config import settings
+from .llm_service import LLMService
 
 logger = logging.getLogger(__name__)
 
 
 class EmbeddingService:
-    """
-    嵌入服务
-    
-    负责将文本转换为向量表示。
-    """
-    
-    def __init__(self):
+    """文本嵌入服务，优先复用统一的运行时配置解析。"""
+
+    def __init__(self, session=None, *, user_id: Optional[int] = None, model: Optional[str] = None):
+        self._cache: dict[str, List[float]] = {}
+        self._user_id = user_id
+        self._model = model or settings.embedding_model or "text-embedding-3-large"
+        self._llm_service = LLMService(session) if session is not None else None
         self._client = None
-        self._model = settings.embedding_model if hasattr(settings, 'embedding_model') else "text-embedding-3-small"
-        self._cache = {}  # 简单的内存缓存
-        self._init_client()
-    
-    def _init_client(self):
-        """初始化 OpenAI 客户端"""
+        if self._llm_service is None:
+            self._init_legacy_client()
+
+    def _init_legacy_client(self) -> None:
+        """兼容旧路径，仅在未提供 session 时启用。"""
         try:
             from openai import AsyncOpenAI
-            api_key = settings.openai_api_key if hasattr(settings, 'openai_api_key') else None
+
+            api_key = settings.embedding_api_key or settings.openai_api_key
+            base_url = str(settings.embedding_base_url) if settings.embedding_base_url else (
+                str(settings.openai_base_url) if settings.openai_base_url else None
+            )
             if api_key:
-                self._client = AsyncOpenAI(api_key=api_key)
-                logger.info("嵌入服务初始化成功")
+                self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+                logger.info("兼容模式嵌入服务初始化成功")
             else:
-                logger.warning("未配置 OpenAI API Key，嵌入服务不可用")
+                logger.warning("未配置可用的默认嵌入 API Key，兼容模式嵌入服务不可用")
         except ImportError:
             logger.warning("未安装 openai 包，嵌入服务不可用")
-        except Exception as e:
-            logger.error(f"初始化嵌入服务失败: {e}")
-    
+        except Exception as exc:  # noqa: BLE001
+            logger.error("初始化嵌入服务失败: %s", exc)
+
     async def get_embedding(
         self,
         text: str,
-        use_cache: bool = True
+        use_cache: bool = True,
     ) -> Optional[List[float]]:
-        """
-        获取文本的嵌入向量
-        
-        Args:
-            text: 输入文本
-            use_cache: 是否使用缓存
-            
-        Returns:
-            嵌入向量，如果失败返回 None
-        """
-        if not text or not self._client:
+        """获取单段文本的嵌入向量。"""
+        if not text:
             return None
-        
-        # 检查缓存
-        if use_cache:
-            cache_key = self._get_cache_key(text)
-            if cache_key in self._cache:
-                return self._cache[cache_key]
-        
-        try:
-            response = await self._client.embeddings.create(
+
+        cache_key = self._get_cache_key(text)
+        if use_cache and cache_key in self._cache:
+            return self._cache[cache_key]
+
+        embedding: Optional[List[float]] = None
+        if self._llm_service is not None:
+            result = await self._llm_service.get_embedding(
+                text,
+                user_id=self._user_id,
                 model=self._model,
-                input=text[:8000]  # 限制长度
             )
-            embedding = response.data[0].embedding
-            
-            # 存入缓存
-            if use_cache:
-                self._cache[cache_key] = embedding
-            
-            return embedding
-        
-        except Exception as e:
-            logger.error(f"生成嵌入向量失败: {e}")
-            return None
-    
-    async def get_embeddings_batch(
-        self,
-        texts: Sequence[str],
-        use_cache: bool = True
-    ) -> List[Optional[List[float]]]:
-        """
-        批量获取文本的嵌入向量
-        
-        Args:
-            texts: 输入文本列表
-            use_cache: 是否使用缓存
-            
-        Returns:
-            嵌入向量列表
-        """
-        if not texts or not self._client:
-            return [None] * len(texts)
-        
-        results = []
-        uncached_indices = []
-        uncached_texts = []
-        
-        # 检查缓存
-        for i, text in enumerate(texts):
-            if use_cache:
-                cache_key = self._get_cache_key(text)
-                if cache_key in self._cache:
-                    results.append(self._cache[cache_key])
-                    continue
-            
-            results.append(None)
-            uncached_indices.append(i)
-            uncached_texts.append(text[:8000])
-        
-        # 批量请求未缓存的文本
-        if uncached_texts:
+            embedding = result or None
+        elif self._client is not None:
             try:
                 response = await self._client.embeddings.create(
                     model=self._model,
-                    input=uncached_texts
+                    input=text[:8000],
                 )
-                
-                for j, embedding_data in enumerate(response.data):
-                    idx = uncached_indices[j]
-                    embedding = embedding_data.embedding
-                    results[idx] = embedding
-                    
-                    # 存入缓存
-                    if use_cache:
-                        cache_key = self._get_cache_key(texts[idx])
-                        self._cache[cache_key] = embedding
-            
-            except Exception as e:
-                logger.error(f"批量生成嵌入向量失败: {e}")
-        
+                embedding = response.data[0].embedding
+            except Exception as exc:  # noqa: BLE001
+                logger.error("生成嵌入向量失败: %s", exc)
+                embedding = None
+
+        if use_cache and embedding:
+            self._cache[cache_key] = embedding
+        return embedding
+
+    async def get_embeddings_batch(
+        self,
+        texts: Sequence[str],
+        use_cache: bool = True,
+    ) -> List[Optional[List[float]]]:
+        """批量获取文本嵌入。"""
+        results: List[Optional[List[float]]] = []
+        for text in texts:
+            results.append(await self.get_embedding(text, use_cache=use_cache))
         return results
-    
+
     def _get_cache_key(self, text: str) -> str:
-        """生成缓存键"""
         return hashlib.md5(text.encode()).hexdigest()
-    
-    def clear_cache(self):
-        """清空缓存"""
+
+    def clear_cache(self) -> None:
         self._cache.clear()
-    
+
     @property
     def is_available(self) -> bool:
-        """检查服务是否可用"""
-        return self._client is not None
+        return self._llm_service is not None or self._client is not None
 
 
 __all__ = ["EmbeddingService"]
