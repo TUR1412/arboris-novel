@@ -580,14 +580,6 @@ const syncExpandedGroups = () => {
   expandedGroupKeys.value = next
 }
 
-watch(
-  [chapterGroups, () => props.selectedChapterNumber, searchQuery, statusFilter],
-  () => {
-    syncExpandedGroups()
-  },
-  { immediate: true }
-)
-
 const scrollChapterList = (direction: 'top' | 'bottom') => {
   const container = listContainer.value
   if (!container) return
@@ -694,43 +686,43 @@ const scrollToFirstIncompleteChapter = async () => {
 }
 
 // 章节状态检查
-const isChapterCompleted = (chapterNumber: number) => {
+function isChapterCompleted(chapterNumber: number) {
   if (!props.project?.chapters) return false
   const chapter = props.project.chapters.find(ch => ch.chapter_number === chapterNumber)
   return chapter && chapter.generation_status === 'successful'
 }
 
-const hasChapterInProgress = (chapterNumber: number) => {
+function hasChapterInProgress(chapterNumber: number) {
   if (!props.project?.chapters) return false
   const chapter = props.project.chapters.find(ch => ch.chapter_number === chapterNumber)
   return chapter && chapter.generation_status === 'waiting_for_confirm'
 }
 
-const isChapterGenerating = (chapterNumber: number) => {
+function isChapterGenerating(chapterNumber: number) {
   if (!props.project?.chapters) return false
   const chapter = props.project.chapters.find(ch => ch.chapter_number === chapterNumber)
   return chapter && chapter.generation_status === 'generating'
 }
 
-const isChapterEvaluating = (chapterNumber: number) => {
+function isChapterEvaluating(chapterNumber: number) {
   if (!props.project?.chapters) return false
   const chapter = props.project.chapters.find(ch => ch.chapter_number === chapterNumber)
   return chapter && chapter.generation_status === 'evaluating'
 }
 
-const isChapterFailed = (chapterNumber: number) => {
+function isChapterFailed(chapterNumber: number) {
   if (!props.project?.chapters) return false
   const chapter = props.project.chapters.find(ch => ch.chapter_number === chapterNumber)
   return chapter && chapter.generation_status === 'failed'
 }
 
-const isChapterSelecting = (chapterNumber: number) => {
+function isChapterSelecting(chapterNumber: number) {
   if (!props.project?.chapters) return false
   const chapter = props.project.chapters.find(ch => ch.chapter_number === chapterNumber)
   return chapter && chapter.generation_status === 'selecting'
 }
 
-const canGenerateChapter = (chapterNumber: number) => {
+function canGenerateChapter(chapterNumber: number) {
   if (!props.project?.blueprint?.chapter_outline) return false
 
   const outlines = [...props.project.blueprint.chapter_outline].sort((a, b) => a.chapter_number - b.chapter_number)
@@ -751,6 +743,14 @@ const canGenerateChapter = (chapterNumber: number) => {
 
   return true
 }
+
+watch(
+  [chapterGroups, () => props.selectedChapterNumber, searchQuery, statusFilter],
+  () => {
+    syncExpandedGroups()
+  },
+  { immediate: true }
+)
 </script>
 
 <style scoped>
